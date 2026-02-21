@@ -91,20 +91,6 @@ export ALPHA_VANTAGE_KEY=your_key_here     # Linux / macOS
 
 ---
 
-## 📤 GitHub'a Güvenli Push
-
-`github_push.ps1` scripti şunları otomatik yapar:
-
-1. API key'i geçici olarak placeholder ile değiştirir
-2. Commit + push eder
-3. Yerel dosyayı gerçek key ile geri yükler — **GitHub'da key görünmez**
-
-```powershell
-.\github_push.ps1
-```
-
----
-
 ## 📋 Gereksinimler
 
 - Python 3.9+
@@ -115,9 +101,3 @@ export ALPHA_VANTAGE_KEY=your_key_here     # Linux / macOS
 ## 🤖 Geliştirme Notu
 
 Bu proje **Claude Sonnet 4.6** (Anthropic) yapay zeka modeli yardımıyla yazılmıştır.
-
----
-
-## 📜 Lisans
-
-MIT
