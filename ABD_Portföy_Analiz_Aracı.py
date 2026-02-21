@@ -1,431 +1,448 @@
 ﻿"""
-Hisse/ETF Analiz Programı
-Otomatik olarak son 5 yılın verilerini çeker ve analiz eder
+ABD Portföy Analiz Aracı  –  v4.0
+===================================
+Gereksinimler:
+  python -m pip install yfinance pandas pandas-datareader numpy openpyxl curl_cffi certifi
 """
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SSL BYPASS  — her şeyden ÖNCE yapılmalı
+# curl_cffi, certifi.where() ile sertifika dosyasını buluyor.
+# Fonksiyonu sıfırlayarak SSL doğrulamasını devre dışı bırakıyoruz.
+# ══════════════════════════════════════════════════════════════════════════════
+import os, ssl, warnings, urllib3
+
+os.environ["CURL_CA_BUNDLE"]     = ""
+os.environ["REQUESTS_CA_BUNDLE"] = ""
+os.environ["SSL_CERT_FILE"]      = ""
+os.environ["PYTHONHTTPSVERIFY"]  = "0"
+
+warnings.filterwarnings("ignore")
+urllib3.disable_warnings()
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# certifi.where() boş string döndürecek şekilde yamala
+try:
+    import certifi
+    certifi.where = lambda: ""
+    certifi.old_where = certifi.where   # yfinance içindeki referanslar için
+except ImportError:
+    pass
+
+# curl_cffi Session'ı verify=False + impersonate ile oluştur
+# impersonate="chrome" → Yahoo Finance'ın bot korumasını da aşar
+try:
+    from curl_cffi import requests as curl_req
+    _CURL_SESSION = curl_req.Session(
+        verify     = False,
+        impersonate= "chrome",
+    )
+    _HAS_CURL = True
+except Exception:
+    _HAS_CURL = False
+    _CURL_SESSION = None
+
+# ── Normal import'lar ─────────────────────────────────────────────────────────
+import time
 import yfinance as yf
 import pandas as pd
 import pandas_datareader as pdr
-from datetime import datetime, timedelta
 import numpy as np
-from typing import List, Dict
-import warnings
-import ssl
-import certifi
-import urllib3
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
-warnings.filterwarnings('ignore')
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# ── Sabitler ──────────────────────────────────────────────────────────────────
+VARSAYILAN_ENF  = 3.0
+ANALIZ_YIL_SAYI = 5
+AYLIK_DONEMLER  = [1, 2, 3, 6, 9]
+RETRY_SAYISI    = 4
+RETRY_BEKLEME   = [5, 15, 30, 60]
 
-# SSL sertifika sorununu çöz
-ssl._create_default_https_context = ssl._create_unverified_context
 
+# ══════════════════════════════════════════════════════════════════════════════
 class HisseAnaliz:
+# ══════════════════════════════════════════════════════════════════════════════
+
     def __init__(self):
-        """Sınıf başlatıcı - son 5 yılı otomatik hesaplar"""
-        self.bugun = datetime.now()
+        self.bugun  = pd.Timestamp.now(tz="UTC")
         self.bu_yil = self.bugun.year
-        
-        # Son 5 yılı otomatik hesapla
-        self.yillar = [self.bu_yil - i for i in range(5, 0, -1)]
-        
-        print(f"\n{'='*60}")
-        print(f"Analiz Tarihi: {self.bugun.strftime('%d.%m.%Y')}")
-        print(f"Analiz Edilen Yıllar: {self.yillar[0]} - {self.yillar[-1]}")
-        print(f"{'='*60}\n")
-        
-        # Enflasyon verilerini çek (yıllık ve aylık)
-        self.enflasyon_verileri = self._enflasyon_verisi_al()
-        self.aylik_enflasyon = self._aylik_enflasyon_al()
-    
-    def _enflasyon_verisi_al(self) -> Dict[int, float]:
-        """ABD enflasyon verilerini FRED'den çeker"""
-        print("📊 ABD enflasyon verileri çekiliyor (FRED)...")
-        
+        self.yillar = list(range(self.bu_yil - ANALIZ_YIL_SAYI, self.bu_yil))
+
+        print(f"\n{'═'*64}")
+        print(f"  ABD PORTFÖY ANALİZ ARACI  –  v4.0")
+        print(f"{'═'*64}")
+        print(f"  Tarih         : {self.bugun.strftime('%d.%m.%Y')}")
+        print(f"  Analiz yılları: {self.yillar[0]} – {self.yillar[-1]}")
+        print(f"  curl_cffi     : {'✅ aktif (SSL bypass + Chrome impersonate)' if _HAS_CURL else '⚠️ yok, yedek mod'}")
+        print(f"{'═'*64}\n")
+
+        self.yillik_enf: Dict[int, float] = self._yillik_enflasyon_al()
+        self.aylik_cpi:  pd.DataFrame      = self._aylik_cpi_al()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # ENFLASYON
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _yillik_enflasyon_al(self) -> Dict[int, float]:
+        print("📊 Yıllık enflasyon çekiliyor (FRED – CPIAUCSL)...")
         try:
-            # FRED'den CPI verisi çek
-            baslangic = datetime(self.yillar[0] - 1, 1, 1)
-            bitis = datetime(self.bu_yil, 12, 31)
-            
-            cpi = pdr.get_data_fred('CPIAUCSL', start=baslangic, end=bitis)
-            
-            # Yıllık enflasyon hesapla
-            enflasyon = {}
+            cpi = pdr.get_data_fred(
+                "CPIAUCSL",
+                start=datetime(self.yillar[0] - 1, 1, 1),
+                end  =datetime(self.bu_yil, 12, 31),
+            )
+            sonuc: Dict[int, float] = {}
             for yil in self.yillar:
                 try:
-                    yil_basi = cpi[cpi.index.year == yil].iloc[0].values[0]
-                    yil_sonu = cpi[cpi.index.year == yil].iloc[-1].values[0]
-                    enflasyon[yil] = ((yil_sonu - yil_basi) / yil_basi) * 100
-                except:
-                    enflasyon[yil] = 3.0  # Ortalama tahmin
-            
-            print("✅ Enflasyon verileri başarıyla alındı\n")
-            return enflasyon
-            
+                    once = cpi[cpi.index.year == yil - 1]["CPIAUCSL"].iloc[-1]
+                    bu   = cpi[cpi.index.year == yil    ]["CPIAUCSL"].iloc[-1]
+                    sonuc[yil] = ((bu - once) / once) * 100
+                except Exception:
+                    sonuc[yil] = VARSAYILAN_ENF
+            print("✅ Yıllık enflasyon alındı.\n")
+            return sonuc
         except Exception as e:
-            print(f"⚠️  FRED'den veri alınamadı, tahmini değerler kullanılıyor: {e}\n")
-            # Tahmini enflasyon değerleri
-            return {yil: 3.0 for yil in self.yillar}
-    
-    def _aylik_enflasyon_al(self) -> pd.DataFrame:
-        """Aylık CPI verilerini çeker"""
-        print("📊 Aylık enflasyon verileri çekiliyor...")
-        
+            print(f"⚠️  FRED erişilemedi, tahmini değer kullanılacak: {e}\n")
+            return {y: VARSAYILAN_ENF for y in self.yillar}
+
+    def _aylik_cpi_al(self) -> pd.DataFrame:
+        print("📊 Aylık CPI çekiliyor (FRED)...")
         try:
-            # Son 2 yıllık aylık CPI verisi
-            baslangic = self.bugun - timedelta(days=730)
-            cpi = pdr.get_data_fred('CPIAUCSL', start=baslangic, end=self.bugun)
-            
-            print("✅ Aylık enflasyon verileri alındı\n")
+            bugun_n = self.bugun.tz_convert(None)
+            cpi = pdr.get_data_fred(
+                "CPIAUCSL",
+                start=(bugun_n - pd.DateOffset(days=730)).to_pydatetime(),
+                end  = bugun_n.to_pydatetime(),
+            )
+            print("✅ Aylık CPI alındı.\n")
             return cpi
-            
         except Exception as e:
-            print(f"⚠️  Aylık enflasyon verisi alınamadı: {e}\n")
-            # Boş DataFrame döndür
+            print(f"⚠️  Aylık CPI alınamadı: {e}\n")
             return pd.DataFrame()
-    
-    def _yfinance_verisi_al(self, sembol: str) -> Dict:
-        """Yahoo Finance'ten veri çeker"""
-        print(f"  📥 Yahoo Finance'ten veri çekiliyor...")
-        
+
+    def _donem_enflasyonu(self, bas: pd.Timestamp, bit: pd.Timestamp) -> float:
         try:
-            # SSL doğrulamasını atla
-            ticker = yf.Ticker(sembol)
-            
-            # Son 6 yıllık veri al (hesaplamalar için)
-            baslangic = datetime(self.yillar[0] - 1, 1, 1)
-            
-            # Session ayarlarıyla veri çek
-            gecmis = ticker.history(start=baslangic, end=self.bugun)
-            
-            if gecmis.empty:
-                print(f"  ⚠️  {sembol} için veri bulunamadı")
-                return None
-            
-            # Temettü bilgileri
-            temettular = ticker.dividends
-            
-            sonuclar = {
-                'fiyat_verileri': gecmis,
-                'temettular': temettular,
-                'bilgi': {}
-            }
-            
-            print(f"  ✅ Yahoo Finance verisi alındı")
-            return sonuclar
-            
-        except Exception as e:
-            print(f"  ❌ Yahoo Finance hatası: {str(e)[:100]}")
-            return None
-    
-    def _yillik_getiri_hesapla(self, fiyat_verileri: pd.DataFrame, yil: int) -> float:
-        """Belirli bir yıl için getiri hesaplar"""
-        try:
-            yil_verileri = fiyat_verileri[fiyat_verileri.index.year == yil]
-            
-            if len(yil_verileri) < 2:
-                return None
-            
-            baslangic_fiyat = yil_verileri.iloc[0]['Close']
-            bitis_fiyat = yil_verileri.iloc[-1]['Close']
-            
-            getiri = ((bitis_fiyat - baslangic_fiyat) / baslangic_fiyat) * 100
-            return getiri
-            
-        except Exception as e:
-            return None
-    
-    def _toplam_getiri_hesapla(self, fiyat_verileri: pd.DataFrame, baslangic_yil: int, bitis_yil: int) -> float:
-        """Belirli yıllar arası toplam getiri hesaplar"""
-        try:
-            baslangic_verileri = fiyat_verileri[fiyat_verileri.index.year == baslangic_yil]
-            bitis_verileri = fiyat_verileri[fiyat_verileri.index.year == bitis_yil]
-            
-            if len(baslangic_verileri) == 0 or len(bitis_verileri) == 0:
-                return None
-            
-            baslangic_fiyat = baslangic_verileri.iloc[0]['Close']
-            bitis_fiyat = bitis_verileri.iloc[-1]['Close']
-            
-            getiri = ((bitis_fiyat - baslangic_fiyat) / baslangic_fiyat) * 100
-            return getiri
-            
-        except Exception as e:
-            return None
-    
-    def _yillik_temettü_hesapla(self, temettular: pd.Series, fiyat_verileri: pd.DataFrame, yil: int) -> float:
-        """Yıllık temettü verimi hesaplar"""
-        try:
-            # O yılın temettülerini al
-            yil_temettuleri = temettular[temettular.index.year == yil]
-            
-            if len(yil_temettuleri) == 0:
-                return 0.0
-            
-            toplam_temettü = yil_temettuleri.sum()
-            
-            # Yıl başı fiyatı
-            yil_baslangic = fiyat_verileri[fiyat_verileri.index.year == yil].iloc[0]['Close']
-            
-            temettü_verimi = (toplam_temettü / yil_baslangic) * 100
-            return temettü_verimi
-            
-        except Exception as e:
-            return 0.0
-    
-    def _donemsel_getiri_hesapla(self, fiyat_verileri: pd.DataFrame, ay_sayisi: int) -> tuple:
-        """Belirtilen ay sayısı için getiri ve enflasyondan arındırılmış getiri hesaplar"""
-        try:
-            # Başlangıç ve bitiş tarihlerini hesapla
-            bitis_tarihi = self.bugun
-            baslangic_tarihi = bitis_tarihi - timedelta(days=ay_sayisi * 30)
-            
-            # Tarihlere en yakın veriyi bul
-            baslangic_verisi = fiyat_verileri[fiyat_verileri.index >= baslangic_tarihi].iloc[0]
-            bitis_verisi = fiyat_verileri.iloc[-1]
-            
-            baslangic_fiyat = baslangic_verisi['Close']
-            bitis_fiyat = bitis_verisi['Close']
-            
-            # Getiri hesapla
-            getiri = ((bitis_fiyat - baslangic_fiyat) / baslangic_fiyat) * 100
-            
-            # Enflasyondan arındırılmış getiri hesapla
-            enflasyon_orani = self._donem_enflasyon_hesapla(baslangic_verisi.name, bitis_verisi.name)
-            reel_getiri = getiri - enflasyon_orani
-            
-            return getiri, reel_getiri, enflasyon_orani
-            
-        except Exception as e:
-            return None, None, None
-    
-    def _donem_enflasyon_hesapla(self, baslangic_tarihi, bitis_tarihi) -> float:
-        """İki tarih arası enflasyon oranını hesaplar"""
-        try:
-            if self.aylik_enflasyon.empty:
-                # Aylık veri yoksa yıllık tahmini oran kullan
-                gun_farki = (bitis_tarihi - baslangic_tarihi).days
-                yillik_enflasyon = 3.0  # Varsayılan
-                return (yillik_enflasyon / 365) * gun_farki
-            
-            # Tarihlere en yakın CPI değerlerini bul
-            baslangic_cpi = self.aylik_enflasyon[self.aylik_enflasyon.index <= baslangic_tarihi].iloc[-1].values[0]
-            bitis_cpi = self.aylik_enflasyon[self.aylik_enflasyon.index <= bitis_tarihi].iloc[-1].values[0]
-            
-            # Enflasyon oranını hesapla
-            enflasyon = ((bitis_cpi - baslangic_cpi) / baslangic_cpi) * 100
-            return enflasyon
-            
-        except Exception as e:
-            # Hata durumunda tahmini oran
-            gun_farki = (bitis_tarihi - baslangic_tarihi).days
-            return (3.0 / 365) * gun_farki
-    
-    def hisse_analiz_et(self, sembol: str) -> Dict:
-        """Bir hisse/ETF için tam analiz yapar"""
-        print(f"\n{'='*60}")
-        print(f"🔍 {sembol} Analiz Ediliyor...")
-        print(f"{'='*60}")
-        
-        # Yahoo Finance'ten veri al
-        yfinance_veri = self._yfinance_verisi_al(sembol)
-        
-        if not yfinance_veri:
-            print(f"❌ {sembol} için veri alınamadı!\n")
-            return None
-        
-        fiyat_verileri = yfinance_veri['fiyat_verileri']
-        temettular = yfinance_veri['temettular']
-        
-        # Sonuç sözlüğü
-        sonuc = {
-            'sembol': sembol,
-            'yillik_getiriler': {},
-            'yillik_reel_getiriler': {},
-            'yillik_temettü_verimleri': {},
-            'son_5_yil_getiri': None,
-            'son_3_yil_getiri': None,
-            'aylik_donemler': {}
-        }
-        
-        # Yıl yıl hesaplamalar
-        print(f"\n📈 Yıllık Analizler:")
-        for yil in self.yillar:
-            getiri = self._yillik_getiri_hesapla(fiyat_verileri, yil)
-            temettü = self._yillik_temettü_hesapla(temettular, fiyat_verileri, yil)
-            
-            if getiri is not None:
-                enflasyon = self.enflasyon_verileri.get(yil, 3.0)
-                reel_getiri = getiri - enflasyon
-                
-                sonuc['yillik_getiriler'][yil] = getiri
-                sonuc['yillik_reel_getiriler'][yil] = reel_getiri
-                sonuc['yillik_temettü_verimleri'][yil] = temettü
-                
-                print(f"  {yil}: Getiri: {getiri:>7.2f}% | " 
-                      f"Enf. Arındırılmış: {reel_getiri:>7.2f}% | "
-                      f"Temettü: {temettü:>6.2f}%")
-        
-        # Son 5 yıl toplam getiri
-        son_5_yil = self._toplam_getiri_hesapla(fiyat_verileri, self.yillar[0], self.yillar[-1])
-        sonuc['son_5_yil_getiri'] = son_5_yil
-        
-        # Son 3 yıl toplam getiri
-        son_3_yil = self._toplam_getiri_hesapla(fiyat_verileri, self.yillar[2], self.yillar[-1])
-        sonuc['son_3_yil_getiri'] = son_3_yil
-        
-        # Aylık dönem analizleri
-        print(f"\n📅 Aylık Dönem Analizleri:")
-        aylik_donemler = [1, 2, 3, 6, 9]
-        
-        for ay in aylik_donemler:
-            getiri, reel_getiri, enflasyon = self._donemsel_getiri_hesapla(fiyat_verileri, ay)
-            
-            if getiri is not None:
-                sonuc['aylik_donemler'][ay] = {
-                    'getiri': getiri,
-                    'reel_getiri': reel_getiri,
-                    'enflasyon': enflasyon
-                }
-                
-                print(f"  Son {ay:>2} Ay: Getiri: {getiri:>7.2f}% | "
-                      f"Enf. Arındırılmış: {reel_getiri:>7.2f}% | "
-                      f"Dönem Enflasyonu: {enflasyon:>5.2f}%")
-        
-        print(f"\n📊 Özet:")
-        print(f"  Son 5 Yıl Toplam Getiri ({self.yillar[0]}-{self.yillar[-1]}): {son_5_yil:.2f}%" if son_5_yil else "  Son 5 Yıl: Veri yok")
-        print(f"  Son 3 Yıl Toplam Getiri ({self.yillar[2]}-{self.yillar[-1]}): {son_3_yil:.2f}%" if son_3_yil else "  Son 3 Yıl: Veri yok")
-        
-        return sonuc
-    
-    def coklu_analiz(self, semboller: List[str]) -> pd.DataFrame:
-        """Birden fazla hisse/ETF için analiz yapar ve karşılaştırma tablosu oluşturur"""
-        tum_sonuclar = []
-        
-        for sembol in semboller:
-            sonuc = self.hisse_analiz_et(sembol)
-            if sonuc:
-                tum_sonuclar.append(sonuc)
-        
-        # Karşılaştırma tablosu oluştur
-        if not tum_sonuclar:
-            print("\n❌ Hiçbir sembol için veri alınamadı!")
-            return None
-        
-        return self._karsilastirma_tablosu_olustur(tum_sonuclar)
-    
-    def _karsilastirma_tablosu_olustur(self, sonuclar: List[Dict]) -> pd.DataFrame:
-        """Sonuçları tablo formatında düzenler"""
-        print(f"\n\n{'='*80}")
-        print(f"📊 KARŞILAŞTIRMA TABLOSU")
-        print(f"{'='*80}\n")
-        
-        # DataFrame oluştur
-        data = []
-        
-        for sonuc in sonuclar:
-            satir = {'Sembol': sonuc['sembol']}
-            
-            # Yıllık getiriler
-            for yil in self.yillar:
-                if yil in sonuc['yillik_getiriler']:
-                    satir[f'{yil} Getiri'] = f"{sonuc['yillik_getiriler'][yil]:.2f}%"
-                    satir[f'{yil} Reel'] = f"{sonuc['yillik_reel_getiriler'][yil]:.2f}%"
-                    satir[f'{yil} Temettü'] = f"{sonuc['yillik_temettü_verimleri'][yil]:.2f}%"
-            
-            # Toplam getiriler
-            if sonuc['son_5_yil_getiri']:
-                satir['Son 5 Yıl'] = f"{sonuc['son_5_yil_getiri']:.2f}%"
-            if sonuc['son_3_yil_getiri']:
-                satir['Son 3 Yıl'] = f"{sonuc['son_3_yil_getiri']:.2f}%"
-            
-            # Aylık dönemler
-            for ay in [1, 2, 3, 6, 9]:
-                if ay in sonuc['aylik_donemler']:
-                    donem = sonuc['aylik_donemler'][ay]
-                    satir[f'Son {ay}A Getiri'] = f"{donem['getiri']:.2f}%"
-                    satir[f'Son {ay}A Reel'] = f"{donem['reel_getiri']:.2f}%"
-            
-            data.append(satir)
-        
-        df = pd.DataFrame(data)
-        print(df.to_string(index=False))
-        
+            if self.aylik_cpi.empty:
+                raise ValueError
+            def _n(ts):
+                return ts.tz_convert(None) if ts.tzinfo else ts
+            cb = self.aylik_cpi[self.aylik_cpi.index <= _n(bas)]["CPIAUCSL"].iloc[-1]
+            ce = self.aylik_cpi[self.aylik_cpi.index <= _n(bit)]["CPIAUCSL"].iloc[-1]
+            return ((ce - cb) / cb) * 100
+        except Exception:
+            return (VARSAYILAN_ENF / 365) * (bit - bas).days
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # VERİ ÇEKME
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _utc(df) -> pd.DataFrame:
+        """DataFrame veya Series index'ini UTC'ye normalize eder."""
+        if isinstance(df, pd.Series):
+            df = df.to_frame()
+        if df.index.tzinfo is None:
+            df.index = df.index.tz_localize("UTC")
+        else:
+            df.index = df.index.tz_convert("UTC")
         return df
-    
-    def excel_kaydet(self, df: pd.DataFrame, dosya_adi: str = None):
-        """Sonuçları Excel'e kaydeder"""
+
+    def _veri_cek(self, sembol: str) -> Optional[Dict]:
+        """
+        Fiyat verisi için yf.download(), temettü için yf.Ticker.dividends kullanır.
+        SSL bypass: curl_cffi Session(verify=False, impersonate='chrome').
+        """
+        print(f"  📥 {sembol} → Yahoo Finance...")
+        baslangic = datetime(self.yillar[0] - 1, 12, 1)
+        bitis     = self.bugun.tz_convert(None).to_pydatetime()
+
+        for deneme in range(RETRY_SAYISI):
+            try:
+                # ── Fiyat ────────────────────────────────────────────────────
+                indir_kwargs = dict(
+                    start       = baslangic,
+                    end         = bitis,
+                    auto_adjust = True,
+                    progress    = False,
+                    timeout     = 30,
+                )
+                # curl_cffi session varsa ekle
+                if _HAS_CURL:
+                    indir_kwargs["session"] = _CURL_SESSION
+
+                ham = yf.download(sembol, **indir_kwargs)
+
+                if ham is None or (isinstance(ham, pd.DataFrame) and ham.empty):
+                    print(f"  ⚠️  {sembol}: fiyat verisi boş.")
+                    return None
+
+                # MultiIndex sütunları düzleştir
+                if isinstance(ham.columns, pd.MultiIndex):
+                    ham.columns = ham.columns.get_level_values(0)
+
+                fiyatlar = self._utc(ham)
+
+                # ── Temettü ───────────────────────────────────────────────────
+                try:
+                    ticker_kwargs = {}
+                    if _HAS_CURL:
+                        ticker_kwargs["session"] = _CURL_SESSION
+                    ticker = yf.Ticker(sembol, **ticker_kwargs)
+                    tem    = ticker.dividends
+                    if tem is not None and not tem.empty:
+                        temettular = self._utc(tem.to_frame()).iloc[:, 0]
+                    else:
+                        temettular = pd.Series(dtype=float)
+                except Exception:
+                    temettular = pd.Series(dtype=float)
+
+                # ── Şirket adı ────────────────────────────────────────────────
+                try:
+                    ad = ticker.fast_info.company_name or sembol
+                except Exception:
+                    ad = sembol
+
+                print(f"  ✅ Alındı  ({len(fiyatlar)} işlem günü)")
+                return {"fiyatlar": fiyatlar, "temettular": temettular, "ad": ad}
+
+            except Exception as e:
+                hata    = str(e)
+                bekleme = RETRY_BEKLEME[min(deneme, len(RETRY_BEKLEME) - 1)]
+                print(f"  ⏳ Deneme {deneme+1}/{RETRY_SAYISI}: {hata[:90]}")
+                print(f"     {bekleme}s bekleniyor...")
+                time.sleep(bekleme)
+
+        print(f"  ❌ {sembol}: {RETRY_SAYISI} denemede de veri alınamadı.")
+        return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # HESAPLAMALAR
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _ydf(df: pd.DataFrame, yil: int) -> pd.DataFrame:
+        return df[df.index.year == yil]
+
+    def _yillik_getiri(self, fiyatlar: pd.DataFrame, yil: int) -> Optional[float]:
+        try:
+            once = self._ydf(fiyatlar, yil - 1)
+            bu   = self._ydf(fiyatlar, yil)
+            if once.empty or bu.empty:
+                return None
+            return ((bu["Close"].iloc[-1] - once["Close"].iloc[-1])
+                    / once["Close"].iloc[-1]) * 100
+        except Exception:
+            return None
+
+    def _toplam_getiri(self, fiyatlar: pd.DataFrame,
+                       bas_yil: int, bit_yil: int) -> Optional[float]:
+        try:
+            once = self._ydf(fiyatlar, bas_yil - 1)
+            bit  = self._ydf(fiyatlar, bit_yil)
+            if once.empty or bit.empty:
+                return None
+            return ((bit["Close"].iloc[-1] - once["Close"].iloc[-1])
+                    / once["Close"].iloc[-1]) * 100
+        except Exception:
+            return None
+
+    def _temettü_verimi(self, temettular: pd.Series,
+                        fiyatlar: pd.DataFrame, yil: int) -> float:
+        try:
+            yt = temettular[temettular.index.year == yil]
+            if yt.empty:
+                return 0.0
+            yf_ = self._ydf(fiyatlar, yil)
+            if yf_.empty:
+                return 0.0
+            return (yt.sum() / yf_["Close"].iloc[0]) * 100
+        except Exception:
+            return 0.0
+
+    def _donemsel_getiri(self, fiyatlar: pd.DataFrame, ay: int
+                         ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        try:
+            hedef   = self.bugun - pd.DateOffset(months=ay)
+            sonraki = fiyatlar[fiyatlar.index >= hedef]
+            if sonraki.empty:
+                return None, None, None
+            bas = sonraki.iloc[0]
+            bit = fiyatlar.iloc[-1]
+            g   = ((bit["Close"] - bas["Close"]) / bas["Close"]) * 100
+            enf = self._donem_enflasyonu(bas.name, bit.name)
+            return g, g - enf, enf
+        except Exception:
+            return None, None, None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # ANA ANALİZ
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def analiz_et(self, sembol: str) -> Optional[Dict]:
+        print(f"\n{'─'*64}")
+        print(f"🔍  {sembol}")
+        print(f"{'─'*64}")
+
+        veri = self._veri_cek(sembol)
+        if not veri:
+            return None
+
+        fiyatlar   = veri["fiyatlar"]
+        temettular = veri["temettular"]
+        sonuc = {
+            "sembol": sembol, "ad": veri["ad"],
+            "yg": {}, "yr": {}, "yt": {},
+            "s5": None, "s3": None, "ay": {},
+        }
+
+        print(f"\n  {'Yıl':<6} {'Getiri':>8} {'Reel':>8} {'Enflasyon':>10} {'Temettü':>8}")
+        print(f"  {'─'*44}")
+        for yil in self.yillar:
+            g = self._yillik_getiri(fiyatlar, yil)
+            if g is None:
+                continue
+            enf = self.yillik_enf.get(yil, VARSAYILAN_ENF)
+            r   = g - enf
+            t   = self._temettü_verimi(temettular, fiyatlar, yil)
+            sonuc["yg"][yil] = g
+            sonuc["yr"][yil] = r
+            sonuc["yt"][yil] = t
+            print(f"  {yil:<6} {g:>+7.2f}%  {r:>+7.2f}%  {enf:>+8.2f}%  {t:>7.2f}%")
+
+        s5 = self._toplam_getiri(fiyatlar, self.yillar[0],  self.yillar[-1])
+        s3 = self._toplam_getiri(fiyatlar, self.yillar[-3], self.yillar[-1])
+        sonuc["s5"] = s5
+        sonuc["s3"] = s3
+        print(f"\n  📊 Toplam getiri:")
+        if s5 is not None:
+            print(f"     Son 5 yıl ({self.yillar[0]}–{self.yillar[-1]}): {s5:>+8.2f}%")
+        if s3 is not None:
+            print(f"     Son 3 yıl ({self.yillar[-3]}–{self.yillar[-1]}): {s3:>+8.2f}%")
+
+        print(f"\n  {'Dönem':<9} {'Getiri':>8} {'Reel':>8} {'Dönem Enf.':>11}")
+        print(f"  {'─'*40}")
+        for ay in AYLIK_DONEMLER:
+            g, r, enf = self._donemsel_getiri(fiyatlar, ay)
+            if g is None:
+                continue
+            sonuc["ay"][ay] = {"g": g, "r": r, "enf": enf}
+            print(f"  Son {ay:>2} ay   {g:>+7.2f}%  {r:>+7.2f}%  {enf:>+9.2f}%")
+
+        return sonuc
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # ÇOKLU ANALİZ + TABLO
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def coklu_analiz(self, semboller: List[str]) -> Optional[pd.DataFrame]:
+        sonuclar = []
+        for i, s in enumerate(semboller):
+            r = self.analiz_et(s)
+            if r:
+                sonuclar.append(r)
+            if i < len(semboller) - 1:
+                time.sleep(4)
+        if not sonuclar:
+            print("\n❌ Hiçbir sembol için veri alınamadı.")
+            return None
+        return self._tablo_olustur(sonuclar)
+
+    def _tablo_olustur(self, sonuclar: List[Dict]) -> pd.DataFrame:
+        satirlar = []
+        for s in sonuclar:
+            r = {"Sembol": s["sembol"], "Ad": s["ad"]}
+            for yil in self.yillar:
+                if yil in s["yg"]:
+                    r[f"{yil} Getiri%"]  = round(s["yg"][yil], 2)
+                    r[f"{yil} Reel%"]    = round(s["yr"][yil], 2)
+                    r[f"{yil} Temettü%"] = round(s["yt"][yil], 2)
+            if s["s5"] is not None:
+                r["5Y Getiri%"] = round(s["s5"], 2)
+            if s["s3"] is not None:
+                r["3Y Getiri%"] = round(s["s3"], 2)
+            for ay in AYLIK_DONEMLER:
+                if ay in s["ay"]:
+                    r[f"{ay}A Getiri%"] = round(s["ay"][ay]["g"], 2)
+                    r[f"{ay}A Reel%"]   = round(s["ay"][ay]["r"], 2)
+            satirlar.append(r)
+
+        df = pd.DataFrame(satirlar)
+        print(f"\n\n{'═'*80}")
+        print("📊  KARŞILAŞTIRMA TABLOSU  (değerler % cinsinden)")
+        print(f"{'═'*80}\n")
+
+        gruplar = [
+            ["Sembol", "Ad"],
+            [c for c in df.columns if "Getiri%" in c and len(c) <= 12],
+            [c for c in df.columns if "Reel%"   in c and len(c) <= 10],
+            [c for c in df.columns if "Temettü%" in c],
+            [c for c in df.columns if c in ("5Y Getiri%", "3Y Getiri%")],
+            [c for c in df.columns if len(c) >= 2 and c[1] == "A"],
+        ]
+        for grup in gruplar:
+            mevcut = [c for c in grup if c in df.columns]
+            if mevcut:
+                print(df[mevcut].to_string(index=False))
+                print()
+        return df
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # EXCEL
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def excel_kaydet(self, df: pd.DataFrame, dosya_adi: Optional[str] = None):
         if df is None:
             return
-        
-        if dosya_adi is None:
-            dosya_adi = f"hisse_analiz_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        
+        if not dosya_adi:
+            dosya_adi = f"portfoy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        elif not dosya_adi.endswith(".xlsx"):
+            dosya_adi += ".xlsx"
         try:
-            df.to_excel(dosya_adi, index=False, engine='openpyxl')
-            print(f"\n✅ Sonuçlar kaydedildi: {dosya_adi}")
+            with pd.ExcelWriter(dosya_adi, engine="openpyxl") as w:
+                df.to_excel(w, index=False, sheet_name="Analiz")
+                ws = w.sheets["Analiz"]
+                for col in ws.columns:
+                    maks = max(len(str(c.value or "")) for c in col)
+                    ws.column_dimensions[col[0].column_letter].width = maks + 4
+            print(f"\n✅ Excel kaydedildi: {dosya_adi}")
         except Exception as e:
-            print(f"\n❌ Excel kaydetme hatası: {e}")
+            print(f"\n❌ Excel hatası: {e}")
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ANA DÖNGÜ
+# ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    """Ana program - Sürekli döngü, 'kapat' yazana kadar devam eder"""
-    print("\n" + "="*60)
-    print("  HİSSE/ETF ANALİZ PROGRAMI")
-    print("  Otomatik Son 5 Yıl Analizi")
-    print("="*60)
-    
-    # Analiz nesnesi oluştur (bir kere)
     analiz = HisseAnaliz()
-    
-    # Ana döngü - kullanıcı 'kapat' yazana kadar devam et
     while True:
-        print("\n" + "="*60)
-        print("📝 Analiz etmek istediğiniz hisse/ETF kodlarını girin")
-        print("   (Virgülle ayırın, örnek: AAPL,MSFT,VOO,QQQ)")
-        print("   Programı kapatmak için: kapat")
-        print("="*60 + "\n")
-        
-        girdi = input("Kodlar: ").strip()
-        
-        # Çıkış kontrolü
-        if girdi.lower() in ['kapat', 'exit', 'quit', 'çıkış']:
-            print("\n" + "="*60)
-            print("  👋 Program kapatılıyor...")
-            print("  Teşekkürler!")
-            print("="*60 + "\n")
+        print("\n" + "─" * 64)
+        print("📝  Hisse / ETF kodlarını girin (virgülle ayırın).")
+        print("    Örnek: AAPL, MSFT, NVDA, VOO, QQQ")
+        print("    Çıkmak için: kapat")
+        print("─" * 64)
+
+        girdi = input("Kodlar → ").strip()
+        if girdi.lower() in {"kapat", "exit", "quit", "q", "çıkış"}:
+            print("\n👋  Görüşmek üzere!\n")
             break
-        
-        # Boş girdi kontrolü
         if not girdi:
-            print("\n⚠️  Lütfen en az bir hisse kodu girin veya 'kapat' yazın.\n")
+            print("⚠️  En az bir sembol girin.\n")
             continue
-        
-        # Sembolleri ayır
-        semboller = [s.strip().upper() for s in girdi.split(',')]
-        
-        print(f"\n🔍 {len(semboller)} hisse analiz edilecek: {', '.join(semboller)}\n")
-        
-        # Analiz yap
+
+        semboller = [s.strip().upper() for s in girdi.split(",") if s.strip()]
+        print(f"\n🔍  {len(semboller)} sembol: {', '.join(semboller)}")
         df = analiz.coklu_analiz(semboller)
-        
-        # Excel'e kaydet teklifi
+
         if df is not None:
-            print("\n" + "-"*60)
-            kaydet = input("💾 Sonuçları Excel'e kaydetmek ister misiniz? (E/H): ").strip().upper()
-            if kaydet == 'E':
-                dosya_adi = input("   Dosya adı (boş bırakın otomatik isim için): ").strip()
-                analiz.excel_kaydet(df, dosya_adi if dosya_adi else None)
-        
-        # Devam edip etmeyeceğini sor
-        print("\n" + "-"*60)
-        devam = input("🔄 Başka bir analiz yapmak ister misiniz? (E/H veya 'kapat'): ").strip().upper()
-        
-        if devam in ['H', 'HAYIR', 'N', 'NO'] or devam.lower() in ['kapat', 'exit', 'quit', 'çıkış']:
-            print("\n" + "="*60)
-            print("  👋 Program kapatılıyor...")
-            print("  Teşekkürler!")
-            print("="*60 + "\n")
+            print("\n" + "─" * 64)
+            if input("💾  Excel'e kaydet? (E / H) → ").strip().upper() == "E":
+                ad = input("    Dosya adı (boş = otomatik) → ").strip()
+                analiz.excel_kaydet(df, ad if ad else None)
+
+        print("\n" + "─" * 64)
+        if input("🔄  Yeni analiz? (E / H) → ").strip().upper() in {"H", "HAYIR", "N", "NO"}:
+            print("\n👋  Görüşmek üzere!\n")
             break
 
 
@@ -433,9 +450,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n" + "="*60)
-        print("  ⚠️  Program kullanıcı tarafından durduruldu (Ctrl+C)")
-        print("="*60 + "\n")
+        print("\n\n⚠️  Program durduruldu (Ctrl+C).\n")
     except Exception as e:
-        print(f"\n\n❌ Beklenmeyen hata: {e}\n")
-        input("Devam etmek için Enter'a basın...")
+        print(f"\n❌  Beklenmeyen hata: {e}")
+        input("Çıkmak için Enter'a basın...")
