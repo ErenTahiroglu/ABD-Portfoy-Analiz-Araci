@@ -1,14 +1,19 @@
 ﻿"""
-ABD Portföy Analiz Aracı  –  v4.0
+ABD Portföy Analiz Aracı  –  v5.0
 ===================================
+Yenilikler (v4 → v5):
+  • Tüm oturum analizleri biriktirilir; Excel export sadece çıkışta sorulur.
+  • Çoklu kaynak: Yahoo Finance + Stooq (pandas-datareader) fiyat doğrulaması.
+  • Alpha Vantage opsiyonel üçüncü kaynak (ALPHA_VANTAGE_KEY env değişkeni ile).
+  • Kaynaklar arası son fiyat farkı > %2 → ⚠️ uyarı + kaynakları listele.
+  • Her analiz için kaynak güvenilirlik özeti yazdırılır.
+
 Gereksinimler:
-  python -m pip install yfinance pandas pandas-datareader numpy openpyxl curl_cffi certifi
+  python -m pip install yfinance pandas pandas-datareader numpy openpyxl curl_cffi certifi requests
 """
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SSL BYPASS  — her şeyden ÖNCE yapılmalı
-# curl_cffi, certifi.where() ile sertifika dosyasını buluyor.
-# Fonksiyonu sıfırlayarak SSL doğrulamasını devre dışı bırakıyoruz.
 # ══════════════════════════════════════════════════════════════════════════════
 import os, ssl, warnings, urllib3
 
@@ -21,29 +26,24 @@ warnings.filterwarnings("ignore")
 urllib3.disable_warnings()
 ssl._create_default_https_context = ssl._create_unverified_context
 
-# certifi.where() boş string döndürecek şekilde yamala
 try:
     import certifi
     certifi.where = lambda: ""
-    certifi.old_where = certifi.where   # yfinance içindeki referanslar için
+    certifi.old_where = certifi.where
 except ImportError:
     pass
 
-# curl_cffi Session'ı verify=False + impersonate ile oluştur
-# impersonate="chrome" → Yahoo Finance'ın bot korumasını da aşar
 try:
     from curl_cffi import requests as curl_req
-    _CURL_SESSION = curl_req.Session(
-        verify     = False,
-        impersonate= "chrome",
-    )
+    _CURL_SESSION = curl_req.Session(verify=False, impersonate="chrome")
     _HAS_CURL = True
 except Exception:
-    _HAS_CURL = False
+    _HAS_CURL  = False
     _CURL_SESSION = None
 
 # ── Normal import'lar ─────────────────────────────────────────────────────────
 import time
+import requests as req_lib
 import yfinance as yf
 import pandas as pd
 import pandas_datareader as pdr
@@ -51,12 +51,32 @@ import numpy as np
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+# ── pandas-datareader için SSL bypass (FRED erişimi) ─────────────────────────
+try:
+    import requests as _req
+    _pdr_session = _req.Session()
+    _pdr_session.verify = False
+    import pandas_datareader.base as _pdr_base
+    _orig_pdr_init = _pdr_base._BaseReader.__init__
+    def _patched_pdr_init(self, *args, **kwargs):
+        _orig_pdr_init(self, *args, **kwargs)
+        self.session = _pdr_session
+    _pdr_base._BaseReader.__init__ = _patched_pdr_init
+except Exception:
+    pass
+
 # ── Sabitler ──────────────────────────────────────────────────────────────────
-VARSAYILAN_ENF  = 3.0
-ANALIZ_YIL_SAYI = 5
-AYLIK_DONEMLER  = [1, 2, 3, 6, 9]
-RETRY_SAYISI    = 4
-RETRY_BEKLEME   = [5, 15, 30, 60]
+VARSAYILAN_ENF   = 3.0
+ANALIZ_YIL_SAYI  = 5
+AYLIK_DONEMLER   = [1, 2, 3, 6, 9]
+RETRY_SAYISI     = 4
+RETRY_BEKLEME    = [5, 15, 30, 60]
+FIYAT_TOLERANS   = 2.0          # Kaynaklar arası max fark (%)
+
+# Alpha Vantage API key — ömür boyu geçerli, yenileme gerekmez.
+# Değiştirmek isterseniz aşağıdaki tırnaklar arasına yeni key'i yazın
+# ya da ALPHA_VANTAGE_KEY ortam değişkenini tanımlayın (env önceliklidir).
+_AV_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "YOUR_API_KEY_HERE")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -68,19 +88,20 @@ class HisseAnaliz:
         self.bu_yil = self.bugun.year
         self.yillar = list(range(self.bu_yil - ANALIZ_YIL_SAYI, self.bu_yil))
 
-        print(f"\n{'═'*64}")
-        print(f"  ABD PORTFÖY ANALİZ ARACI  –  v4.0")
-        print(f"{'═'*64}")
+        print(f"\n{'═'*68}")
+        print(f"  ABD PORTFÖY ANALİZ ARACI  –  v5.0")
+        print(f"{'═'*68}")
         print(f"  Tarih         : {self.bugun.strftime('%d.%m.%Y')}")
         print(f"  Analiz yılları: {self.yillar[0]} – {self.yillar[-1]}")
         print(f"  curl_cffi     : {'✅ aktif (SSL bypass + Chrome impersonate)' if _HAS_CURL else '⚠️ yok, yedek mod'}")
-        print(f"{'═'*64}\n")
+        print(f"  Alpha Vantage : {'✅ ' + _AV_KEY[:8] + '...' if _AV_KEY else '⚠️ yok (ALPHA_VANTAGE_KEY env boş)'}")
+        print(f"{'═'*68}\n")
 
         self.yillik_enf: Dict[int, float] = self._yillik_enflasyon_al()
         self.aylik_cpi:  pd.DataFrame      = self._aylik_cpi_al()
 
     # ─────────────────────────────────────────────────────────────────────────
-    # ENFLASYON
+    # ENFLASYON  (FRED birincil, BLS backup)
     # ─────────────────────────────────────────────────────────────────────────
 
     def _yillik_enflasyon_al(self) -> Dict[int, float]:
@@ -99,7 +120,7 @@ class HisseAnaliz:
                     sonuc[yil] = ((bu - once) / once) * 100
                 except Exception:
                     sonuc[yil] = VARSAYILAN_ENF
-            print("✅ Yıllık enflasyon alındı.\n")
+            print("✅ Yıllık enflasyon alındı (FRED).\n")
             return sonuc
         except Exception as e:
             print(f"⚠️  FRED erişilemedi, tahmini değer kullanılacak: {e}\n")
@@ -133,12 +154,11 @@ class HisseAnaliz:
             return (VARSAYILAN_ENF / 365) * (bit - bas).days
 
     # ─────────────────────────────────────────────────────────────────────────
-    # VERİ ÇEKME
+    # YARDIMCI
     # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _utc(df) -> pd.DataFrame:
-        """DataFrame veya Series index'ini UTC'ye normalize eder."""
         if isinstance(df, pd.Series):
             df = df.to_frame()
         if df.index.tzinfo is None:
@@ -147,73 +167,187 @@ class HisseAnaliz:
             df.index = df.index.tz_convert("UTC")
         return df
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # KAYNAK 1: Yahoo Finance
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _yahoo_cek(self, sembol: str, baslangic: datetime, bitis: datetime
+                   ) -> Optional[pd.DataFrame]:
+        indir_kwargs = dict(
+            start=baslangic, end=bitis,
+            auto_adjust=True, progress=False, timeout=30,
+        )
+        if _HAS_CURL:
+            indir_kwargs["session"] = _CURL_SESSION
+        ham = yf.download(sembol, **indir_kwargs)
+        if ham is None or ham.empty:
+            return None
+        if isinstance(ham.columns, pd.MultiIndex):
+            ham.columns = ham.columns.get_level_values(0)
+        return self._utc(ham)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # KAYNAK 2: Stooq (pandas-datareader)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _stooq_cek(self, sembol: str, baslangic: datetime, bitis: datetime
+                   ) -> Optional[pd.DataFrame]:
+        """
+        Stooq, ABD hisselerini '<SEMBOL>.US' formatında kabul eder.
+        Bazen sembol Stooq'ta bulunmaz; o zaman None döner.
+        """
+        try:
+            stooq_sembol = sembol if "." in sembol else f"{sembol}.US"
+            df = pdr.get_data_stooq(stooq_sembol, start=baslangic, end=bitis)
+            if df is None or df.empty:
+                return None
+            df = df.sort_index()        # Stooq ters sıralı gelir
+            # Stooq sütunları: Open, High, Low, Close, Volume
+            return self._utc(df)
+        except Exception:
+            return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # KAYNAK 3: Alpha Vantage (opsiyonel, API key gerekir)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _alphavantage_cek(self, sembol: str) -> Optional[pd.DataFrame]:
+        if not _AV_KEY:
+            return None
+        try:
+            url = (
+                f"https://www.alphavantage.co/query"
+                f"?function=TIME_SERIES_DAILY_ADJUSTED"
+                f"&symbol={sembol}&outputsize=full&apikey={_AV_KEY}"
+            )
+            r = req_lib.get(url, timeout=30, verify=False)
+            data = r.json()
+            ts = data.get("Time Series (Daily)", {})
+            if not ts:
+                return None
+            df = pd.DataFrame.from_dict(ts, orient="index")
+            df.index = pd.to_datetime(df.index)
+            df = df.rename(columns={"5. adjusted close": "Close"})
+            df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+            df = df[["Close"]].sort_index()
+            return self._utc(df)
+        except Exception:
+            return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # ÇOK KAYNAKLI VERİ ÇEKME + DOĞRULAMA
+    # ─────────────────────────────────────────────────────────────────────────
+
     def _veri_cek(self, sembol: str) -> Optional[Dict]:
-        """
-        Fiyat verisi için yf.download(), temettü için yf.Ticker.dividends kullanır.
-        SSL bypass: curl_cffi Session(verify=False, impersonate='chrome').
-        """
-        print(f"  📥 {sembol} → Yahoo Finance...")
+        print(f"  📥 {sembol} → veri çekiliyor...")
         baslangic = datetime(self.yillar[0] - 1, 12, 1)
         bitis     = self.bugun.tz_convert(None).to_pydatetime()
 
+        # ── Fiyat: Yahoo Finance (birincil, retry'lı) ─────────────────────────
+        fiyatlar_yf = None
         for deneme in range(RETRY_SAYISI):
             try:
-                # ── Fiyat ────────────────────────────────────────────────────
-                indir_kwargs = dict(
-                    start       = baslangic,
-                    end         = bitis,
-                    auto_adjust = True,
-                    progress    = False,
-                    timeout     = 30,
-                )
-                # curl_cffi session varsa ekle
-                if _HAS_CURL:
-                    indir_kwargs["session"] = _CURL_SESSION
-
-                ham = yf.download(sembol, **indir_kwargs)
-
-                if ham is None or (isinstance(ham, pd.DataFrame) and ham.empty):
-                    print(f"  ⚠️  {sembol}: fiyat verisi boş.")
-                    return None
-
-                # MultiIndex sütunları düzleştir
-                if isinstance(ham.columns, pd.MultiIndex):
-                    ham.columns = ham.columns.get_level_values(0)
-
-                fiyatlar = self._utc(ham)
-
-                # ── Temettü ───────────────────────────────────────────────────
-                try:
-                    ticker_kwargs = {}
-                    if _HAS_CURL:
-                        ticker_kwargs["session"] = _CURL_SESSION
-                    ticker = yf.Ticker(sembol, **ticker_kwargs)
-                    tem    = ticker.dividends
-                    if tem is not None and not tem.empty:
-                        temettular = self._utc(tem.to_frame()).iloc[:, 0]
-                    else:
-                        temettular = pd.Series(dtype=float)
-                except Exception:
-                    temettular = pd.Series(dtype=float)
-
-                # ── Şirket adı ────────────────────────────────────────────────
-                try:
-                    ad = ticker.fast_info.company_name or sembol
-                except Exception:
-                    ad = sembol
-
-                print(f"  ✅ Alındı  ({len(fiyatlar)} işlem günü)")
-                return {"fiyatlar": fiyatlar, "temettular": temettular, "ad": ad}
-
+                fiyatlar_yf = self._yahoo_cek(sembol, baslangic, bitis)
+                if fiyatlar_yf is not None:
+                    print(f"     ✅ Yahoo Finance: {len(fiyatlar_yf)} gün")
+                    break
             except Exception as e:
-                hata    = str(e)
                 bekleme = RETRY_BEKLEME[min(deneme, len(RETRY_BEKLEME) - 1)]
-                print(f"  ⏳ Deneme {deneme+1}/{RETRY_SAYISI}: {hata[:90]}")
-                print(f"     {bekleme}s bekleniyor...")
+                print(f"     ⏳ Yahoo deneme {deneme+1}/{RETRY_SAYISI}: {str(e)[:80]}")
                 time.sleep(bekleme)
 
-        print(f"  ❌ {sembol}: {RETRY_SAYISI} denemede de veri alınamadı.")
-        return None
+        # ── Fiyat: Stooq (ikincil) ────────────────────────────────────────────
+        fiyatlar_stooq = None
+        try:
+            fiyatlar_stooq = self._stooq_cek(sembol, baslangic, bitis)
+            if fiyatlar_stooq is not None:
+                print(f"     ✅ Stooq        : {len(fiyatlar_stooq)} gün")
+            else:
+                print(f"     ⚠️  Stooq: veri yok")
+        except Exception as e:
+            print(f"     ⚠️  Stooq hata: {e}")
+
+        # ── Fiyat: Alpha Vantage (üçüncül, opsiyonel) ─────────────────────────
+        fiyatlar_av = None
+        if _AV_KEY:
+            try:
+                fiyatlar_av = self._alphavantage_cek(sembol)
+                if fiyatlar_av is not None:
+                    print(f"     ✅ Alpha Vantage: {len(fiyatlar_av)} gün")
+                else:
+                    print(f"     ⚠️  Alpha Vantage: veri yok")
+            except Exception as e:
+                print(f"     ⚠️  Alpha Vantage hata: {e}")
+
+        # ── En az bir kaynak lazım ────────────────────────────────────────────
+        if fiyatlar_yf is None and fiyatlar_stooq is None and fiyatlar_av is None:
+            print(f"  ❌ {sembol}: hiçbir kaynaktan veri alınamadı.")
+            return None
+
+        # ── Çapraz doğrulama (son fiyat karşılaştırma) ────────────────────────
+        self._capraz_dogrula(sembol, fiyatlar_yf, fiyatlar_stooq, fiyatlar_av)
+
+        # ── Birincil fiyat: mevcut kaynakların ilki ───────────────────────────
+        if fiyatlar_yf is not None:
+            fiyatlar = fiyatlar_yf
+        elif fiyatlar_stooq is not None:
+            fiyatlar = fiyatlar_stooq
+        else:
+            fiyatlar = fiyatlar_av
+
+        # ── Temettü (Yahoo'dan) ───────────────────────────────────────────────
+        temettular = pd.Series(dtype=float)
+        try:
+            ticker_kwargs = {"session": _CURL_SESSION} if _HAS_CURL else {}
+            ticker = yf.Ticker(sembol, **ticker_kwargs)
+            tem    = ticker.dividends
+            if tem is not None and not tem.empty:
+                temettular = self._utc(tem.to_frame()).iloc[:, 0]
+        except Exception:
+            pass
+
+        # ── Şirket adı ────────────────────────────────────────────────────────
+        ad = sembol
+        try:
+            ad = ticker.fast_info.company_name or sembol
+        except Exception:
+            pass
+
+        return {"fiyatlar": fiyatlar, "temettular": temettular, "ad": ad}
+
+    def _capraz_dogrula(self, sembol: str,
+                        yf_df:    Optional[pd.DataFrame],
+                        stooq_df: Optional[pd.DataFrame],
+                        av_df:    Optional[pd.DataFrame]) -> None:
+        """
+        Mevcut kaynaklardan son kapanış fiyatını alır, aralarındaki farkı kontrol eder.
+        Fark FIYAT_TOLERANS (%) üzerindeyse kullanıcıyı uyarır.
+        """
+        fiyatlar_dict: Dict[str, float] = {}
+        for isim, df in [("Yahoo", yf_df), ("Stooq", stooq_df), ("AlphaVantage", av_df)]:
+            if df is not None and not df.empty and "Close" in df.columns:
+                try:
+                    fiyatlar_dict[isim] = float(df["Close"].dropna().iloc[-1])
+                except Exception:
+                    pass
+
+        if len(fiyatlar_dict) < 2:
+            return          # Tek kaynak varsa kıyaslama yapılamaz
+
+        degerler = list(fiyatlar_dict.values())
+        maks     = max(degerler)
+        min_     = min(degerler)
+        fark_pct = abs(maks - min_) / min_ * 100
+
+        satir = "  🔍 Fiyat çapraz doğrulama: " + \
+                " | ".join(f"{k}={v:.2f}$" for k, v in fiyatlar_dict.items())
+        print(satir)
+
+        if fark_pct > FIYAT_TOLERANS:
+            print(f"  ⚠️  DİKKAT: Kaynaklar arası fiyat farkı = %{fark_pct:.2f} "
+                  f"(eşik: %{FIYAT_TOLERANS}). Verileri manuel doğrulayın!")
+        else:
+            print(f"  ✅ Kaynaklar tutarlı (max fark: %{fark_pct:.2f})")
 
     # ─────────────────────────────────────────────────────────────────────────
     # HESAPLAMALAR
@@ -279,9 +413,9 @@ class HisseAnaliz:
     # ─────────────────────────────────────────────────────────────────────────
 
     def analiz_et(self, sembol: str) -> Optional[Dict]:
-        print(f"\n{'─'*64}")
+        print(f"\n{'─'*68}")
         print(f"🔍  {sembol}")
-        print(f"{'─'*64}")
+        print(f"{'─'*68}")
 
         veri = self._veri_cek(sembol)
         if not veri:
@@ -296,7 +430,7 @@ class HisseAnaliz:
         }
 
         print(f"\n  {'Yıl':<6} {'Getiri':>8} {'Reel':>8} {'Enflasyon':>10} {'Temettü':>8}")
-        print(f"  {'─'*44}")
+        print(f"  {'─'*46}")
         for yil in self.yillar:
             g = self._yillik_getiri(fiyatlar, yil)
             if g is None:
@@ -387,11 +521,12 @@ class HisseAnaliz:
         return df
 
     # ─────────────────────────────────────────────────────────────────────────
-    # EXCEL
+    # EXCEL  (tüm oturum biriktirilmiş sonuçları kaydeder)
     # ─────────────────────────────────────────────────────────────────────────
 
     def excel_kaydet(self, df: pd.DataFrame, dosya_adi: Optional[str] = None):
-        if df is None:
+        if df is None or df.empty:
+            print("⚠️  Kaydedilecek veri yok.")
             return
         if not dosya_adi:
             dosya_adi = f"portfoy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
@@ -415,33 +550,68 @@ class HisseAnaliz:
 
 def main():
     analiz = HisseAnaliz()
+    # Oturum boyunca biriktirilen tüm sonuçlar
+    tum_df_listesi: List[pd.DataFrame] = []
+
     while True:
-        print("\n" + "─" * 64)
+        print("\n" + "─" * 68)
         print("📝  Hisse / ETF kodlarını girin (virgülle ayırın).")
         print("    Örnek: AAPL, MSFT, NVDA, VOO, QQQ")
         print("    Çıkmak için: kapat")
-        print("─" * 64)
+        if tum_df_listesi:
+            toplam_sembol = sum(len(df) for df in tum_df_listesi)
+            print(f"    📂 Bu oturumda şimdiye kadar analiz edilen sembol: {toplam_sembol}")
+        print("─" * 68)
 
         girdi = input("Kodlar → ").strip()
         if girdi.lower() in {"kapat", "exit", "quit", "q", "çıkış"}:
+            # ── ÇIKIŞ: Birikmiş tüm sonuçları Excel'e sun ───────────────────
+            if tum_df_listesi:
+                print(f"\n\n{'═'*68}")
+                print("💾  OTURUM SONU — BİRİKMİŞ ANALİZ SONUÇLARI")
+                print(f"{'═'*68}")
+                # DataFrame'leri birleştir; aynı sembol varsa en son analiz kalır
+                tum_df = pd.concat(tum_df_listesi, ignore_index=True)
+                tum_df = tum_df.drop_duplicates(subset=["Sembol"], keep="last")
+                print(f"  Toplam sembol: {len(tum_df)}")
+                print(f"  Semboller    : {', '.join(tum_df['Sembol'].tolist())}\n")
+
+                if input("💾  Tüm sonuçları Excel'e kaydet? (E / H) → ").strip().upper() == "E":
+                    ad = input("    Dosya adı (boş = otomatik) → ").strip()
+                    analiz.excel_kaydet(tum_df, ad if ad else None)
             print("\n👋  Görüşmek üzere!\n")
             break
+
         if not girdi:
             print("⚠️  En az bir sembol girin.\n")
             continue
 
         semboller = [s.strip().upper() for s in girdi.split(",") if s.strip()]
-        print(f"\n🔍  {len(semboller)} sembol: {', '.join(semboller)}")
+        print(f"\n🔍  {len(semboller)} sembol analiz ediliyor: {', '.join(semboller)}")
         df = analiz.coklu_analiz(semboller)
 
         if df is not None:
-            print("\n" + "─" * 64)
-            if input("💾  Excel'e kaydet? (E / H) → ").strip().upper() == "E":
-                ad = input("    Dosya adı (boş = otomatik) → ").strip()
-                analiz.excel_kaydet(df, ad if ad else None)
+            tum_df_listesi.append(df)
+            print(f"\n  ℹ️  Sonuçlar biriktirildi. "
+                  f"Excel için programı 'kapat' ile sonlandırın.")
 
-        print("\n" + "─" * 64)
-        if input("🔄  Yeni analiz? (E / H) → ").strip().upper() in {"H", "HAYIR", "N", "NO"}:
+        print("\n" + "─" * 68)
+        devam = input("🔄  Yeni analiz? (E / H) → ").strip().upper()
+        if devam in {"H", "HAYIR", "N", "NO"}:
+            # Kullanıcı H dedi ama döngü çıkışı için "kapat" lazım değil;
+            # direkt çıkış bloğunu tetikle
+            if tum_df_listesi:
+                print(f"\n\n{'═'*68}")
+                print("💾  OTURUM SONU — BİRİKMİŞ ANALİZ SONUÇLARI")
+                print(f"{'═'*68}")
+                tum_df = pd.concat(tum_df_listesi, ignore_index=True)
+                tum_df = tum_df.drop_duplicates(subset=["Sembol"], keep="last")
+                print(f"  Toplam sembol: {len(tum_df)}")
+                print(f"  Semboller    : {', '.join(tum_df['Sembol'].tolist())}\n")
+
+                if input("💾  Tüm sonuçları Excel'e kaydet? (E / H) → ").strip().upper() == "E":
+                    ad = input("    Dosya adı (boş = otomatik) → ").strip()
+                    analiz.excel_kaydet(tum_df, ad if ad else None)
             print("\n👋  Görüşmek üzere!\n")
             break
 
