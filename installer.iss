@@ -6,8 +6,8 @@
 
 #define AppName      "ABD Portföy Analiz Aracı"
 #define AppVersion   "5.0"
-#define AppPublisher ""
-#define AppURL       ""
+#define AppPublisher "ErenTahiroglu"
+#define AppURL       "https://github.com/ErenTahiroglu/ABD-Portfoy-Analiz-Araci"
 #define AppExeName   "ABD Portföy Analiz.exe"
 #define AppId        "{B9D3449F-EBE6-416F-B7C3-13B25E1EB732}"
 
