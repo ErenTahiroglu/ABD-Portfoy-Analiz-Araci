@@ -60,14 +60,21 @@ class FirstRunDialog(ctk.CTkToplevel):
         self.title("Hoşgeldiniz — İlk Kurulum")
         self.geometry("520x340")
         self.resizable(False, False)
-        self.grab_set()
-        self.focus_force()
         self._av_key = ""
+        self._parent = parent
+        # CTkToplevel ilk render tamamlanmadan grab/build yapılırsa boş görünür;
+        # kısa bir gecikmeyle içeriği çiz.
+        self.after(150, self._init_content)
+
+    def _init_content(self) -> None:
         self._build()
         self.update_idletasks()
-        px = parent.winfo_x() + (parent.winfo_width()  - self.winfo_width())  // 2
-        py = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
+        px = self._parent.winfo_x() + (self._parent.winfo_width()  - self.winfo_width())  // 2
+        py = self._parent.winfo_y() + (self._parent.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{px}+{py}")
+        self.grab_set()
+        self.focus_force()
+        self.lift()
 
     def _build(self) -> None:
         pad = dict(padx=24, pady=6)
@@ -585,10 +592,14 @@ class GUIApp(ctk.CTk):
                     self._status_lbl.configure(text=txt)
                 elif mtype == "result":
                     df, analiz = payload
-                    self._current_df = df
-                    self._analiz     = analiz
+                    self._analiz = analiz
                     self._session_dfs.append(df)
-                    self._populate_table(df)
+                    # Tüm oturum sonuçlarını birleştir; aynı sembol varsa en son kalır
+                    merged = (pd.concat(self._session_dfs, ignore_index=True)
+                              .drop_duplicates("Sembol", keep="last")
+                              .reset_index(drop=True))
+                    self._current_df = merged
+                    self._populate_table(merged)
                     self._refresh_chart()
                     self._on_done()
                 elif mtype == "error":
