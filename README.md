@@ -1,50 +1,61 @@
 # 📊 ABD Portföy Analiz Aracı
 
-ABD hisse senetleri ve ETF'lerin finansal performansını **nominal ve reel (enflasyondan arındırılmış)** bazda karşılaştırmalı olarak analiz eden, tamamen otomatik bir Python aracı.
+ABD hisse senetleri ve ETF'lerin finansal performansını **nominal ve reel (enflasyondan arındırılmış)** bazda karşılaştırmalı olarak analiz eden masaüstü GUI uygulaması.
 
 ---
 
 ## 🚀 Özellikler
 
+- **Masaüstü arayüz** — Koyu/açık tema, sekme tabanlı görünüm
 - **Yıllık getiri analizi** — Son 5 yılın yıl yıl nominal ve reel getirileri
-- **Kısa vadeli performans** — Son 1, 2, 3, 6 ve 9 aylık dönemler
+- **Kısa vadeli performans** — Son 1, 3, 6 ve 9 aylık dönemler
 - **Temettü verimi** — Her yıl için otomatik hesaplama
 - **Toplam getiri** — 3 yıllık ve 5 yıllık kümülatif performans
 - **Reel getiri** — ABD enflasyonu (FRED – CPI) ile arındırılmış değerler
-- **Çoklu kaynak doğrulama** — Yahoo Finance + Stooq + Alpha Vantage karşılaştırması; kaynaklar arası fiyat farkı > %2 ise otomatik uyarı
-- **Birikimli Excel export** — Oturum boyunca analiz edilen tüm semboller tek dosyada
-- **Sürekli döngü** — İstediğiniz kadar sembol analiz edin, `kapat` yazana kadar devam edin
+- **Çoklu kaynak doğrulama** — Yahoo Finance + Stooq + Alpha Vantage; fiyat farkı > %2 ise uyarı
+- **Grafikler** — Yıllık getiri, 5Y/3Y karşılaştırma, aylık dönem grafikleri
+- **Excel export** — Oturumun tüm sonuçları tek dosyaya
 
 ---
 
-## 🛠️ Kurulum
+## 🛠️ Kurulum (kaynak koddan çalıştırma)
 
+### 1. Python'ı yükle
+[python.org](https://www.python.org/downloads/) adresinden **Python 3.9+** indir ve kur.
+Kurulum sırasında **"Add Python to PATH"** seçeneğini işaretle.
+
+### 2. Repoyu indir
 ```bash
 git clone https://github.com/ErenTahiroglu/ABD-Portfoy-Analiz-Araci.git
 cd ABD-Portfoy-Analiz-Araci
-
-python -m venv env
-env\Scripts\activate          # Windows
-# source env/bin/activate     # Linux / macOS
-
-pip install yfinance pandas pandas-datareader numpy openpyxl curl_cffi certifi requests
 ```
+Ya da GitHub'da **Code → Download ZIP** ile indir, çıkart.
+
+### 3. Sanal ortam oluştur ve bağımlılıkları yükle
+```bash
+py -m venv env
+.\env\Scripts\pip install -r requirements.txt
+```
+
+### 4. Uygulamayı başlat
+```bash
+.\env\Scripts\python gui_app.py
+```
+
+İlk açılışta API anahtarı sorulur — geçmek için "Şimdilik Geç" tıklanabilir.
 
 ---
 
-## ▶️ Kullanım
+## 📦 Hazır .exe (Windows kurulum paketi)
 
-```bash
-python ABD_Portföy_Analiz_Aracı.py
-```
+Kaynak kodu derleyip kurulum paketi oluşturmak için:
 
-```
-Kodlar → AAPL, MSFT, NVDA, VOO, QQQ
-```
-
-- Birden fazla sembol virgülle ayrılır
-- Analiz bittikten sonra yeni semboller girilebilir
-- `kapat` yazılınca oturumun tüm sonuçları Excel'e kaydedilebilir
+1. [Inno Setup 6](https://jrsoftware.org/isdl.php) kur
+2. PowerShell'de çalıştır:
+   ```powershell
+   .\create_installer.ps1
+   ```
+3. `dist\ABD_Portfoy_Analiz_Setup_v5.0.exe` oluşur — çift tıkla, kur, kullan.
 
 ---
 
@@ -59,34 +70,28 @@ Kodlar → AAPL, MSFT, NVDA, VOO, QQQ
 
 ---
 
+## 🔑 Alpha Vantage API Key (opsiyonel)
+
+[alphavantage.co](https://www.alphavantage.co/support/#api-key) adresinden ücretsiz alınır.
+
+- Uygulama ilk açılışta sizi API anahtarı girmeye davet eder.
+- Girdiğiniz anahtar `.env` dosyasına kaydedilir (bir daha sorulmaz).
+- İstediğiniz zaman ana ekrandaki **AV Key** alanından değiştirebilirsiniz.
+
+---
+
 ## 📁 Proje Yapısı
 
 ```
 ABD-Portfoy-Analiz-Araci/
 │
-├── ABD_Portföy_Analiz_Aracı.py   # Ana program
-├── github_push.ps1                # Güvenli GitHub yedekleme scripti
+├── gui_app.py                     # Masaüstü GUI (buradan başlatılır)
+├── ABD_Portföy_Analiz_Aracı.py    # Çekirdek analiz motoru
 ├── requirements.txt               # Bağımlılıklar
-└── README.md
-```
-
----
-
-## 🔑 Alpha Vantage API Key
-
-[alphavantage.co](https://www.alphavantage.co/support/#api-key) adresinden ücretsiz alınır. Ömür boyu geçerlidir, yenileme gerekmez.
-
-Koda eklemek için `ABD_Portföy_Analiz_Aracı.py` içindeki şu satırı düzenleyin:
-
-```python
-_AV_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "YOUR_API_KEY_HERE")
-```
-
-Ya da ortam değişkeni olarak tanımlayın:
-
-```bash
-set ALPHA_VANTAGE_KEY=your_key_here        # Windows
-export ALPHA_VANTAGE_KEY=your_key_here     # Linux / macOS
+├── create_installer.ps1           # PyInstaller + Inno Setup build pipeline
+├── installer.iss                  # Inno Setup kurulum scripti
+├── github_push.ps1                # Manuel GitHub yedekleme scripti
+└── .vscode/                       # VS Code ayarları (isteğe bağlı)
 ```
 
 ---
@@ -94,10 +99,10 @@ export ALPHA_VANTAGE_KEY=your_key_here     # Linux / macOS
 ## 📋 Gereksinimler
 
 - Python 3.9+
-- Windows / Linux / macOS
+- Windows 10/11 (macOS/Linux'ta GUI kısmen çalışabilir, test edilmemiştir)
 
 ---
 
 ## 🤖 Geliştirme Notu
 
-Bu proje **Claude Sonnet 4.6** (Anthropic) yapay zeka modeli yardımıyla yazılmıştır.
+Bu proje **Claude Sonnet 4.6** (Anthropic) yapay zeka modeli yardımıyla geliştirilmiştir.
