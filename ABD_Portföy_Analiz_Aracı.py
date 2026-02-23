@@ -41,6 +41,33 @@ except Exception:
     _HAS_CURL  = False
     _CURL_SESSION = None
 
+# ── pandas_datareader uyumluluk yaması (pandas 2.x frozen-exe desteği) ────────
+try:
+    import pandas.util._decorators as _pd_dec
+    if not hasattr(_pd_dec, "deprecate_kwarg"):
+        raise AttributeError
+except (ImportError, AttributeError):
+    import sys as _sys, types as _types
+    if "pandas.util._decorators" not in _sys.modules:
+        _sys.modules["pandas.util._decorators"] = _types.ModuleType("pandas.util._decorators")
+    _pd_dec = _sys.modules["pandas.util._decorators"]
+    from functools import wraps as _wraps
+
+    def _deprecate_kwarg(old_arg_name, new_arg_name=None, mapping=None, stacklevel=2):  # noqa: ARG001
+        def _dec(func):
+            @_wraps(func)
+            def _wrapper(*args, **kwargs):
+                if old_arg_name in kwargs:
+                    if new_arg_name is not None:
+                        kwargs[new_arg_name] = kwargs.pop(old_arg_name)
+                    else:
+                        kwargs.pop(old_arg_name)
+                return func(*args, **kwargs)
+            return _wrapper
+        return _dec
+
+    setattr(_pd_dec, "deprecate_kwarg", _deprecate_kwarg)
+
 # ── Normal import'lar ─────────────────────────────────────────────────────────
 import time
 import requests as req_lib

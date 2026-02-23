@@ -51,9 +51,14 @@ if (Test-Path "dist\$ExeAdi.exe") {
     --collect-all curl_cffi `
     --collect-all customtkinter `
     --collect-all yfinance `
+    --collect-all pandas_datareader `
     --hidden-import pandas_datareader `
+    --hidden-import pandas_datareader.stooq `
     --hidden-import pandas_datareader.stooq.daily `
     --hidden-import pandas_datareader.fred `
+    --hidden-import pandas_datareader.base `
+    --hidden-import pandas_datareader.data `
+    --hidden-import pandas.util._decorators `
     --hidden-import openpyxl `
     --hidden-import dotenv `
     --hidden-import certifi `
