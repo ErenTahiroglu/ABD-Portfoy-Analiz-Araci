@@ -44,6 +44,81 @@ ctk.set_default_color_theme("blue")
 _PALETTE = [cm.tab10(i) for i in range(10)]   # 10 renk paleti
 
 
+def _env_path() -> str:
+    """Uygulamanın bulunduğu dizindeki .env dosyasının tam yolu."""
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(sys.executable), ".env")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+class FirstRunDialog(ctk.CTkToplevel):
+    """İlk açılışta .env yoksa gösterilen konfigürasyon diyaloğu."""
+
+    def __init__(self, parent: ctk.CTk):
+        super().__init__(parent)
+        self.title("Hoşgeldiniz — İlk Kurulum")
+        self.geometry("520x340")
+        self.resizable(False, False)
+        self.grab_set()
+        self.focus_force()
+        self._av_key = ""
+        self._build()
+        self.update_idletasks()
+        px = parent.winfo_x() + (parent.winfo_width()  - self.winfo_width())  // 2
+        py = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{px}+{py}")
+
+    def _build(self) -> None:
+        pad = dict(padx=24, pady=6)
+
+        ctk.CTkLabel(self,
+                     text="ABD Portföy Analiz Aracı",
+                     font=ctk.CTkFont(size=20, weight="bold")
+                     ).pack(**pad, pady=(22, 2))
+
+        ctk.CTkLabel(self,
+                     text="Uygulama, enflasyon-düzeltmeli analiz için ücretsiz bir\n"
+                          "Alpha Vantage API anahtarı kullanabilir (opsiyonel).\n\n"
+                          "Anahtarınızı şimdi girin ya da geçin — istediğiniz zaman\n"
+                          "ana ekrandaki 'AV Key' alanından değiştirebilirsiniz.",
+                     justify="center", wraplength=460,
+                     font=ctk.CTkFont(size=13)
+                     ).pack(**pad)
+
+        ctk.CTkLabel(self, text="Alpha Vantage API Anahtarı (opsiyonel):"
+                     ).pack(anchor="w", padx=24, pady=(10, 0))
+        self._entry = ctk.CTkEntry(
+            self, width=472,
+            placeholder_text="Ücretsiz anahtar al: alphavantage.co/support/#api-key")
+        self._entry.pack(padx=24, pady=(0, 4))
+
+        btn_f = ctk.CTkFrame(self, fg_color="transparent")
+        btn_f.pack(pady=(8, 20))
+        ctk.CTkButton(btn_f, text="💾  Kaydet ve Devam Et",
+                      command=self._save, width=210).pack(side="left", padx=8)
+        ctk.CTkButton(btn_f, text="Şimdilik Geç",
+                      command=self.destroy,
+                      fg_color="#555", width=130).pack(side="left", padx=8)
+
+    def _save(self) -> None:
+        key = self._entry.get().strip()
+        if key:
+            try:
+                with open(_env_path(), "w", encoding="utf-8") as f:
+                    f.write(f"ALPHA_VANTAGE_KEY={key}\n")
+                os.environ["ALPHA_VANTAGE_KEY"] = key
+                _core._AV_KEY = key
+                self._av_key = key
+            except Exception:
+                pass
+        self.destroy()
+
+    @property
+    def av_key(self) -> str:
+        return self._av_key
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 class StdoutRedirector:
     """
@@ -155,6 +230,7 @@ class GUIApp(ctk.CTk):
 
         self._build_ui()
         self._poll_queue()
+        self.after(400, self._check_first_run)
 
     # ─── UI inşası ────────────────────────────────────────────────────────────
 
@@ -608,6 +684,17 @@ class GUIApp(ctk.CTk):
         ctk.set_appearance_mode(mode)
         self._apply_tree_style(mode)
         self._refresh_chart()
+
+    def _check_first_run(self) -> None:
+        """.env yoksa ve ortamda key tanımsızsa ilk kurulum diyaloğunu göster."""
+        if os.path.exists(_env_path()):
+            return
+        if os.environ.get("ALPHA_VANTAGE_KEY", ""):
+            return
+        dlg = FirstRunDialog(self)
+        self.wait_window(dlg)
+        if dlg.av_key and not self._av_entry.get().strip():
+            self._av_entry.insert(0, dlg.av_key)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

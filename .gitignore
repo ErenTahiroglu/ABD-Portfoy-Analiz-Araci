@@ -1,4 +1,7 @@
-﻿# Visual Studio / VS Code
+﻿# Claude Code (yerel AI asistan verileri)
+.claude/
+
+# Visual Studio / VS Code
 .vs/
 # .vscode/ klasörü repoda tutulur (tasks, launch, settings paylaşılır)
 # Sadece makineye özgü dosyalar hariç:
@@ -18,3 +21,8 @@ __pycache__/
 # Program çıktı dosyaları
 *.xlsx
 *.log
+
+# PyInstaller çıktıları
+dist/
+build/
+*.spec
