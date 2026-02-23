@@ -77,7 +77,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "  📦 Boyut : $boyutMB MB" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Çalıştırmak için:" -ForegroundColor Yellow
-    Write-Host "  .\dist\'ABD Portföy Analiz.exe'" -ForegroundColor White
+    Write-Host "  .\dist\`"ABD Portföy Analiz.exe`"" -ForegroundColor White
 } else {
     Write-Host ""
     Write-Host "  ❌ Build başarısız. Yukarıdaki hata mesajlarını inceleyin." -ForegroundColor Red
