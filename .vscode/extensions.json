@@ -1,8 +1,0 @@
-{
-    "recommendations": [
-        "ms-python.python",
-        "ms-python.pylance",
-        "ms-python.debugpy",
-        "eamodio.gitlens"
-    ]
-}
