@@ -1,0 +1,82 @@
+name: Build & Release Installer
+
+# v ile başlayan tag push'larında tetiklenir: git tag v5.1 && git push origin v5.1
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # GitHub Release oluşturmak için gerekli
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. Kaynak kodu al ────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Python kur ────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 3. Bağımlılıkları yükle ──────────────────────────────────────────────
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── 4. Inno Setup kur ────────────────────────────────────────────────────
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      # ── 5. PyInstaller ile .exe üret ─────────────────────────────────────────
+      - name: Build .exe with PyInstaller
+        shell: pwsh
+        run: |
+          $env:PYTHONUTF8 = "1"
+          python -m PyInstaller `
+            gui_app.py `
+            --onefile `
+            --noconsole `
+            --name "ABD Portföy Analiz" `
+            "--add-data=ABD_Portföy_Analiz_Aracı.py;." `
+            --collect-all curl_cffi `
+            --collect-all customtkinter `
+            --collect-all yfinance `
+            --hidden-import pandas_datareader `
+            --hidden-import pandas_datareader.stooq.daily `
+            --hidden-import pandas_datareader.fred `
+            --hidden-import openpyxl `
+            --hidden-import dotenv `
+            --hidden-import certifi `
+            --hidden-import PIL._tkinter_finder `
+            --noconfirm `
+            --clean
+
+      # ── 6. Inno Setup ile kurulum paketi oluştur ─────────────────────────────
+      - name: Build installer with Inno Setup
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # ── 7. GitHub Release oluştur ve .exe yükle ──────────────────────────────
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "ABD Portföy Analiz Aracı ${{ github.ref_name }}"
+          body: |
+            ## Kurulum (Python gerekmez)
+
+            1. Aşağıdaki `ABD_Portfoy_Analiz_Setup_*.exe` dosyasını indir
+            2. Çift tıkla → İleri → Kur
+            3. Uygulama açılır, API anahtarı isterse gir ya da geç
+
+            ## Değişiklikler
+          generate_release_notes: true
+          files: dist/ABD_Portfoy_Analiz_Setup_v*.exe
