@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(\"c:/Users/erent/source/repos/ABD Portföy Analiz Aracı/ABD-Portfoy-Analiz-Araci/env/Scripts/pip.exe\" install python-dotenv curl_cffi)"
-    ]
-  }
-}
