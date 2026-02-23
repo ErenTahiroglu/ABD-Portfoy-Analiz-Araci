@@ -73,10 +73,17 @@ RETRY_SAYISI     = 4
 RETRY_BEKLEME    = [5, 15, 30, 60]
 FIYAT_TOLERANS   = 2.0          # Kaynaklar arası max fark (%)
 
+# ── .env dosyasını yükle (varsa; python-dotenv opsiyoneldir) ─────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # Alpha Vantage API key — ömür boyu geçerli, yenileme gerekmez.
-# Değiştirmek isterseniz aşağıdaki tırnaklar arasına yeni key'i yazın
-# ya da ALPHA_VANTAGE_KEY ortam değişkenini tanımlayın (env önceliklidir).
-_AV_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "YOUR_API_KEY_HERE")
+# Değiştirmek isterseniz .env dosyasına ALPHA_VANTAGE_KEY=... satırı ekleyin
+# ya da aşağıdaki tırnaklar arasına doğrudan yazın.
+_AV_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

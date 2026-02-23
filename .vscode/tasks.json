@@ -1,0 +1,53 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "GitHub'a Yedekle (Tek Seferlik)",
+            "detail": "Tüm değişiklikleri commit + push yapar (.env hariç)",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -File '${workspaceFolder}/github_push.ps1'",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true,
+                "focus": true
+            },
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "Otomatik Yedeklemeyi Başlat (60s aralık)",
+            "detail": "İzin ver: Ctrl+Shift+P → 'Tasks: Manage Automatic Tasks in Folder' → Allow",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -File '${workspaceFolder}/github_autowatcher.ps1'",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true,
+                "focus": false
+            },
+            "isBackground": true,
+            "runOptions": {
+                "runOn": "folderOpen"
+            },
+            "group": "none",
+            "problemMatcher": [
+                {
+                    "pattern": [
+                        {
+                            "regexp": "^$",
+                            "file": 1,
+                            "location": 2,
+                            "message": 3
+                        }
+                    ],
+                    "background": {
+                        "activeOnStart": true,
+                        "beginsPattern": "Otomatik GitHub Yedekleme",
+                        "endsPattern": "Durdurmak için"
+                    }
+                }
+            ]
+        }
+    ]
+}

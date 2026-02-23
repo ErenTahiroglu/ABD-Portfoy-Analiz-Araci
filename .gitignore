@@ -1,4 +1,20 @@
-﻿.vs/
+﻿# Visual Studio / VS Code
+.vs/
+# .vscode/ klasörü repoda tutulur (tasks, launch, settings paylaşılır)
+# Sadece makineye özgü dosyalar hariç:
+.vscode/*.local*
+
+# Sanal ortam
 env/
+
+# Python derleme
 __pycache__/
 *.pyc
+*.pyo
+
+# Gizli ortam değişkenleri
+.env
+
+# Program çıktı dosyaları
+*.xlsx
+*.log

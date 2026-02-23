@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "ABD Portföy Analiz Aracı",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/ABD_Portföy_Analiz_Aracı.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONIOENCODING": "utf-8"
+            }
+        }
+    ]
+}
