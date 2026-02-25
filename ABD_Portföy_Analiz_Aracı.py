@@ -44,16 +44,17 @@ except Exception:
 # ── pandas_datareader uyumluluk yaması (pandas 2.x frozen-exe desteği) ────────
 try:
     import pandas.util._decorators as _pd_dec
-    if not hasattr(_pd_dec, "deprecate_kwarg"):
-        raise AttributeError
-except (ImportError, AttributeError):
-    import sys as _sys, types as _types
-    if "pandas.util._decorators" not in _sys.modules:
-        _sys.modules["pandas.util._decorators"] = _types.ModuleType("pandas.util._decorators")
-    _pd_dec = _sys.modules["pandas.util._decorators"]
     from functools import wraps as _wraps
 
-    def _deprecate_kwarg(old_arg_name, new_arg_name=None, mapping=None, stacklevel=2):  # noqa: ARG001
+    # Pandas 3.x sürümüyle uyumsuzluk nedeniyle, pandas_datareader için
+    # her durumda eski imzayı (old_arg, new_arg) destekleyen bir yama uyguluyoruz.
+
+    def _deprecate_kwarg(old_arg_name, new_arg_name=None, mapping=None, stacklevel=2):
+        # Pandas 3.x, ilk argüman olarak 'klass' (Type[Warning]) bekliyor olabilir.
+        # Eğer old_arg_name string değilse, bu yama devre dışı kalmalı (veya no-op dönmeli).
+        if not isinstance(old_arg_name, str):
+            return lambda func: func
+
         def _dec(func):
             @_wraps(func)
             def _wrapper(*args, **kwargs):
@@ -66,10 +67,14 @@ except (ImportError, AttributeError):
             return _wrapper
         return _dec
 
-    setattr(_pd_dec, "deprecate_kwarg", _deprecate_kwarg)
+    _pd_dec.deprecate_kwarg = _deprecate_kwarg
+
+except Exception:
+    pass
 
 # ── Normal import'lar ─────────────────────────────────────────────────────────
 import time
+import concurrent.futures
 import requests as req_lib
 import yfinance as yf
 import pandas as pd
@@ -112,6 +117,8 @@ except ImportError:
 # ya da aşağıdaki tırnaklar arasına doğrudan yazın.
 _AV_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "")
 
+# Enflasyon verisi önbelleği (modül düzeyinde tek seferlik)
+_ENFLASYON_CACHE = None
 
 # ══════════════════════════════════════════════════════════════════════════════
 class HisseAnaliz:
@@ -131,8 +138,18 @@ class HisseAnaliz:
         print(f"  Alpha Vantage : {'✅ ' + _AV_KEY[:8] + '...' if _AV_KEY else '⚠️ yok (ALPHA_VANTAGE_KEY env boş)'}")
         print(f"{'═'*68}\n")
 
-        self.yillik_enf: Dict[int, float] = self._yillik_enflasyon_al()
-        self.aylik_cpi:  pd.DataFrame      = self._aylik_cpi_al()
+        # Önbellek kontrolü
+        global _ENFLASYON_CACHE
+        if _ENFLASYON_CACHE is None:
+            _ENFLASYON_CACHE = {
+                "yillik": self._yillik_enflasyon_al(),
+                "aylik": self._aylik_cpi_al()
+            }
+        else:
+            print("✅ Enflasyon verisi önbellekten alındı.")
+
+        self.yillik_enf: Dict[int, float] = _ENFLASYON_CACHE["yillik"]
+        self.aylik_cpi:  pd.DataFrame      = _ENFLASYON_CACHE["aylik"]
 
     # ─────────────────────────────────────────────────────────────────────────
     # ENFLASYON  (FRED birincil, BLS backup)
@@ -446,12 +463,29 @@ class HisseAnaliz:
     # ANA ANALİZ
     # ─────────────────────────────────────────────────────────────────────────
 
-    def analiz_et(self, sembol: str) -> Optional[Dict]:
+    def _veri_cek_parallel(self, semboller: List[str]) -> Dict[str, Optional[Dict]]:
+        print(f"\n⚡ {len(semboller)} sembol için veri indiriliyor (Paralel)...")
+        sonuclar = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_symbol = {executor.submit(self._veri_cek, s): s for s in semboller}
+            for future in concurrent.futures.as_completed(future_to_symbol):
+                s = future_to_symbol[future]
+                try:
+                    data = future.result()
+                    sonuclar[s] = data
+                except Exception as e:
+                    print(f"❌ {s} veri çekme hatası: {e}")
+                    sonuclar[s] = None
+        return sonuclar
+
+    def analiz_et(self, sembol: str, veri: Optional[Dict] = None) -> Optional[Dict]:
         print(f"\n{'─'*68}")
         print(f"🔍  {sembol}")
         print(f"{'─'*68}")
 
-        veri = self._veri_cek(sembol)
+        if veri is None:
+            veri = self._veri_cek(sembol)
+
         if not veri:
             return None
 
@@ -504,12 +538,16 @@ class HisseAnaliz:
 
     def coklu_analiz(self, semboller: List[str]) -> Optional[pd.DataFrame]:
         sonuclar = []
-        for i, s in enumerate(semboller):
-            r = self.analiz_et(s)
+
+        # 1. Aşama: Tüm verileri paralel indir
+        veri_havuzu = self._veri_cek_parallel(semboller)
+
+        # 2. Aşama: Sırayla analiz et ve yazdır
+        for s in semboller:
+            r = self.analiz_et(s, veri=veri_havuzu.get(s))
             if r:
                 sonuclar.append(r)
-            if i < len(semboller) - 1:
-                time.sleep(4)
+
         if not sonuclar:
             print("\n❌ Hiçbir sembol için veri alınamadı.")
             return None
