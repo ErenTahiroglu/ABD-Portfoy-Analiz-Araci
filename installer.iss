@@ -5,11 +5,12 @@
 ; ============================================================================
 
 #define AppName      "ABD Portföy Analiz Aracı"
-#define AppVersion   "5.0"
+#define AppVersion   "5.0-ARCHIVED"
 #define AppPublisher "ErenTahiroglu"
 #define AppURL       "https://github.com/ErenTahiroglu/ABD-Portfoy-Analiz-Araci"
 #define AppExeName   "ABD Portföy Analiz.exe"
 #define AppId        "{B9D3449F-EBE6-416F-B7C3-13B25E1EB732}"
+#define ArchiveNote  "Bu sürüm ARCHIVED (arşivlenmiş) olup, sadece eğitim amaçlıdır.&#13;&#10;Dış API'lar kırılsa bile mock_data/ klasöründeki örnek verilerle çalışır."
 
 ; ── Kurulum genel ayarları ───────────────────────────────────────────────────
 [Setup]
@@ -77,3 +78,8 @@ Name: "{autodesktop}\{#AppName}"; \
 Filename: "{app}\{#AppExeName}"; \
     Description: "ABD Portföy Analiz Aracı'nı şimdi başlat"; \
     Flags: nowait postinstall skipifsilent
+
+; ── Kurulum sonrası mesaj ────────────────────────────────────────────────────
+[Messages]
+FinishedHeadingLabel=Kurulum Tamamlandı
+FinishedLabelNoIcons={#AppName} {#AppVersion}%n%n⚠️ ARCHIVED: Bu araç sadece eğitim amaçlıdır, yatırım tavsiyesi değildir.%nDış API'lar kırılsa bile mock_data/ verisiyle çalışır.

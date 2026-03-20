@@ -11,20 +11,30 @@
 
 Set-Location $PSScriptRoot
 
-$Python    = ".\env\Scripts\python.exe"
-$AnaDosya  = "ABD_Portföy_Analiz_Aracı.py"
+# ── Göreceli dosya yolları (proje taşınabilirliği için) ──────────────────────
+$Python    = Join-Path -Path $PSScriptRoot -ChildPath "env\Scripts\python.exe"
+$AnaDosya  = Join-Path -Path $PSScriptRoot -ChildPath "ABD_Portföy_Analiz_Aracı.py"
+$GuiDosya  = Join-Path -Path $PSScriptRoot -ChildPath "gui_app.py"
 $ExeAdi    = "ABD Portföy Analiz"
+$DistDir   = Join-Path -Path $PSScriptRoot -ChildPath "dist"
 
 # ── Python kontrolü ───────────────────────────────────────────────────────────
 if (-not (Test-Path $Python)) {
     Write-Host "  ❌ Python bulunamadı: $Python" -ForegroundColor Red
-    Write-Host "  Önce 'py -m venv env' ve pip install -r requirements.txt çalıştırın."
+    Write-Host "  Önce şu komutları çalıştırın:" -ForegroundColor Yellow
+    Write-Host "    py -m venv env" -ForegroundColor White
+    Write-Host "    .\env\Scripts\pip install -r requirements.txt" -ForegroundColor White
     exit 1
 }
 
-# ── Ana dosya kontrolü ────────────────────────────────────────────────────────
+# ── Ana dosyalar kontrolü ─────────────────────────────────────────────────────
 if (-not (Test-Path $AnaDosya)) {
     Write-Host "  ❌ Bulunamadı: $AnaDosya" -ForegroundColor Red
+    exit 1
+}
+
+if (-not (Test-Path $GuiDosya)) {
+    Write-Host "  ❌ Bulunamadı: $GuiDosya" -ForegroundColor Red
     exit 1
 }
 
@@ -36,14 +46,15 @@ Write-Host "  ╚═════════════════════
 Write-Host ""
 
 # ── Eski dist/ temizle ────────────────────────────────────────────────────────
-if (Test-Path "dist\$ExeAdi.exe") {
-    Remove-Item "dist\$ExeAdi.exe" -Force
+$ExePath = Join-Path -Path $DistDir -ChildPath "$ExeAdi.exe"
+if (Test-Path $ExePath) {
+    Remove-Item $ExePath -Force
     Write-Host "  🗑️  Önceki .exe temizlendi." -ForegroundColor Gray
 }
 
 # ── PyInstaller ───────────────────────────────────────────────────────────────
 & $Python -m PyInstaller `
-    gui_app.py `
+    $GuiDosya `
     --onefile `
     --noconsole `
     --name $ExeAdi `
@@ -68,16 +79,15 @@ if (Test-Path "dist\$ExeAdi.exe") {
 
 # ── Sonuç ─────────────────────────────────────────────────────────────────────
 if ($LASTEXITCODE -eq 0) {
-    $exePath = "dist\$ExeAdi.exe"
-    $boyutMB = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
+    $boyutMB = [math]::Round((Get-Item $ExePath).Length / 1MB, 1)
 
     Write-Host ""
     Write-Host "  ✅ Build tamamlandı!" -ForegroundColor Green
-    Write-Host "  📁 Konum : $((Resolve-Path $exePath).Path)" -ForegroundColor Green
+    Write-Host "  📁 Konum : $(Resolve-Path $ExePath)" -ForegroundColor Green
     Write-Host "  📦 Boyut : $boyutMB MB" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Çalıştırmak için:" -ForegroundColor Yellow
-    Write-Host "  .\dist\`"ABD Portföy Analiz.exe`"" -ForegroundColor White
+    Write-Host "  & '$ExePath'" -ForegroundColor White
 } else {
     Write-Host ""
     Write-Host "  ❌ Build başarısız. Yukarıdaki hata mesajlarını inceleyin." -ForegroundColor Red

@@ -22,14 +22,27 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 import numpy as np
 import pandas as pd
 
-# ── PyInstaller freeze desteği ────────────────────────────────────────────────
+# ── PyInstaller freeze desteği (ARCHIVED projeler için robust path handling) ─────
 if getattr(sys, "frozen", False):
-    _BASE = sys._MEIPASS          # .exe içinden çalışırken
+    # .exe (PyInstaller) içinden çalışırken
+    _BASE = sys._MEIPASS
+    _SCRIPT_DIR = os.path.dirname(sys.executable)
 else:
-    _BASE = os.path.dirname(os.path.abspath(__file__))
+    # Kaynak koddan çalışırken
+    _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    _BASE = _SCRIPT_DIR
 
 if _BASE not in sys.path:
     sys.path.insert(0, _BASE)
+
+# ── Önemli dosya yolları (tüm bağlamda çalışacak şekilde) ─────────────────────
+def _ensure_path(relative_path: str) -> str:
+    """Relative path → absolute path (frozen veya source context'te)."""
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, relative_path)
 
 # ── İş mantığı modülünü yükle (Türkçe dosya adı) ─────────────────────────────
 try:
