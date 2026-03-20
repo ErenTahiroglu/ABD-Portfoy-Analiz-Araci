@@ -112,6 +112,11 @@ except ImportError:
 # ya da aşağıdaki tırnaklar arasına doğrudan yazın.
 _AV_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "")
 
+# ── OFFLINE/MOCK MOD (Archived projeler için dış API'lar kırılsa bile çalışsın) ───
+# USE_MOCK_DATA=True olarak ayarlanırsa mock_data/ klasöründen CSV verisi okunur.
+_USE_MOCK_DATA = os.environ.get("USE_MOCK_DATA", "").lower() in ("true", "1", "yes")
+_MOCK_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mock_data")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 class HisseAnaliz:
@@ -123,10 +128,11 @@ class HisseAnaliz:
         self.yillar = list(range(self.bu_yil - ANALIZ_YIL_SAYI, self.bu_yil))
 
         print(f"\n{'═'*68}")
-        print(f"  ABD PORTFÖY ANALİZ ARACI  –  v5.0")
+        print(f"  ABD PORTFÖY ANALİZ ARACI  –  v5.0 [ARCHIVED]")
         print(f"{'═'*68}")
         print(f"  Tarih         : {self.bugun.strftime('%d.%m.%Y')}")
         print(f"  Analiz yılları: {self.yillar[0]} – {self.yillar[-1]}")
+        print(f"  Mock Mode     : {'✅ AKTIF (mock_data/*.csv kullanılıyor)' if _USE_MOCK_DATA else '⚠️ Kapalı (çevrimiçi API kullanılıyor)'}")
         print(f"  curl_cffi     : {'✅ aktif (SSL bypass + Chrome impersonate)' if _HAS_CURL else '⚠️ yok, yedek mod'}")
         print(f"  Alpha Vantage : {'✅ ' + _AV_KEY[:8] + '...' if _AV_KEY else '⚠️ yok (ALPHA_VANTAGE_KEY env boş)'}")
         print(f"{'═'*68}\n")
@@ -272,8 +278,34 @@ class HisseAnaliz:
     # ÇOK KAYNAKLI VERİ ÇEKME + DOĞRULAMA
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _mock_csv_oku(self, sembol: str) -> Optional[pd.DataFrame]:
+        """Mock mod: mock_data/{SEMBOL}.csv dosyasından veri okur."""
+        csv_path = os.path.join(_MOCK_DATA_DIR, f"{sembol}.csv")
+        if not os.path.exists(csv_path):
+            return None
+        try:
+            df = pd.read_csv(csv_path, parse_dates=["Date"], index_col="Date")
+            df.index = df.index.tz_localize("UTC")
+            print(f"     ✅ Mock veri (CSV): {len(df)} gün ({csv_path})")
+            return df
+        except Exception as e:
+            print(f"     ❌ Mock CSV hata: {e}")
+            return None
+
     def _veri_cek(self, sembol: str) -> Optional[Dict]:
         print(f"  📥 {sembol} → veri çekiliyor...")
+
+        # ── MOCK MOD: çevrimdışı veri ──────────────────────────────────────────
+        if _USE_MOCK_DATA:
+            mock_df = self._mock_csv_oku(sembol)
+            if mock_df is not None:
+                # Mock veriden şirket adı belirle
+                ad = f"{sembol} (Mock Data)"
+                return {"fiyatlar": mock_df, "temettular": pd.Series(dtype=float), "ad": ad}
+            else:
+                print(f"  ❌ {sembol}: mock_data/{sembol}.csv bulunamadı.")
+                return None
+
         baslangic = datetime(self.yillar[0] - 1, 12, 1)
         bitis     = self.bugun.tz_convert(None).to_pydatetime()
 

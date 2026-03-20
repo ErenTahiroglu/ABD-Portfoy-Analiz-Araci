@@ -1,4 +1,12 @@
-# 📊 ABD Portföy Analiz Aracı
+# 📊 ABD Portföy Analiz Aracı — [ARCHIVED / DONDURULDU]
+
+> ⚠️ **Bu proje ARCHIVED (arşivlenmiş) statüsündedir.** Daha fazla geliştirme yapılmayacak, sadece eğitim amaçlıdır.
+> **Not:** Dış API'lar (Yahoo Finance, FRED, vb.) gelecekte değişse bile, `mock_data/` klasöründeki örnek CSV verisiyle çalışır.
+>
+> **Yasal Uyarı:** Bu araç tarafından sağlanan herhangi bir veri, analiz veya sonuç **yatırım tavsiyesi DEĞİLDİR**.
+> Finansal kararlar alırken profesyonel danışman ile görüşün.
+
+---
 
 ABD hisse senetleri ve ETF'lerin finansal performansını **nominal ve reel (enflasyondan arındırılmış)** bazda karşılaştırmalı olarak analiz eden masaüstü GUI uygulaması.
 
@@ -38,15 +46,36 @@ py -m venv env
 ```
 
 ### 4. Uygulamayı başlat
+
+#### Çevrimiçi mod (varsayılan):
 ```bash
 .\env\Scripts\python gui_app.py
 ```
 
-İlk açılışta API anahtarı sorulur — geçmek için "Şimdilik Geç" tıklanabilir.
+#### Çevrimdışı mod (mock veri ile):
+```bash
+# Windows PowerShell
+$env:USE_MOCK_DATA='true'
+.\env\Scripts\python gui_app.py
+
+# Windows CMD
+set USE_MOCK_DATA=true
+.\env\Scripts\python gui_app.py
+
+# Unix/macOS/WSL
+export USE_MOCK_DATA=true
+./env/Scripts/python gui_app.py
+```
+
+**Not:** İlk açılışta API anahtarı sorulur — geçmek için "Şimdilik Geç" tıklanabilir.
+
+**Mock Modu Hakkında:** Dış API'lar kırılsa bile `mock_data/` klasöründeki AAPL, MSFT, TSLA örnek verilerini kullanarak analizler yapabilirsiniz.
 
 ---
 
 ## 📦 Hazır .exe (Windows kurulum paketi)
+
+### Manuel Derleme (Local Build)
 
 Kaynak kodu derleyip kurulum paketi oluşturmak için:
 
@@ -55,11 +84,23 @@ Kaynak kodu derleyip kurulum paketi oluşturmak için:
    ```powershell
    .\create_installer.ps1
    ```
-3. `dist\ABD_Portfoy_Analiz_Setup_v5.0.exe` oluşur — çift tıkla, kur, kullan.
+3. `dist\ABD_Portfoy_Analiz_Setup_v5.0-ARCHIVED.exe` oluşur — çift tıkla, kur, kullan.
+
+### Build Betiklerinin Detayları
+
+| Betik | Amaç | Kullanım |
+|---|---|---|
+| `build.ps1` | PyInstaller ile .exe oluştur | `.\build.ps1` |
+| `create_installer.ps1` | PyInstaller + Inno Setup (tam setup paketi) | `.\create_installer.ps1` |
+| `installer.iss` | Inno Setup yapılandırması (tarafından otomatik çalıştırılır) | Manual çalıştırılmaz |
+
+**Not:** GitHub Actions otomatik build desteği ARCHIVED sürümlerde desteklenmeyebilir. **Lokal derlemeden çıkan .exe'yi kullanın.**
 
 ---
 
 ## 📡 Veri Kaynakları
+
+### Çevrimiçi Kaynaklar (Varsayılan)
 
 | Kaynak | Kullanım | Notlar |
 |---|---|---|
@@ -67,6 +108,17 @@ Kaynak kodu derleyip kurulum paketi oluşturmak için:
 | **Stooq** | Fiyat (ikincil, doğrulama) | API key gerektirmez |
 | **Alpha Vantage** | Fiyat (üçüncül, doğrulama) | Ücretsiz key, 25 istek/gün |
 | **FRED – CPIAUCSL** | Enflasyon | Federal Reserve, aylık ve yıllık CPI |
+
+### Çevrimdışı Kaynaklar (Mock Mode)
+
+`USE_MOCK_DATA=true` ayarlandığında:
+
+| Kaynak | Dosya Yeri | Notlar |
+|---|---|---|
+| **Mock OHLCV** | `mock_data/{SEMBOL}.csv` | AAPL, MSFT, TSLA örnek verisi dahil |
+| **Enflasyon** | Varsayılan %3.0 | CPI dosyası yok, tahmini değer kullanılır |
+
+**Archived Projelerin Avantajı:** Dış API'lar kırılsa bile, `mock_data/` klasöründeki CSV verisiyle uygulama çalışmaya devam eder.
 
 ---
 

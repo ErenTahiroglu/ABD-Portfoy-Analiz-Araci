@@ -14,8 +14,12 @@
 
 Set-Location $PSScriptRoot
 
-$Python  = ".\env\Scripts\python.exe"
-$ISSFile = "installer.iss"
+# ── Göreceli dosya yolları (proje taşınabilirliği için) ──────────────────────
+$Python    = Join-Path -Path $PSScriptRoot -ChildPath "env\Scripts\python.exe"
+$ISSFile   = Join-Path -Path $PSScriptRoot -ChildPath "installer.iss"
+$GuiDosya  = Join-Path -Path $PSScriptRoot -ChildPath "gui_app.py"
+$AnaDosya  = Join-Path -Path $PSScriptRoot -ChildPath "ABD_Portföy_Analiz_Aracı.py"
+$DistDir   = Join-Path -Path $PSScriptRoot -ChildPath "dist"
 
 # ── Ön kontroller ─────────────────────────────────────────────────────────────
 Write-Host ""
@@ -52,11 +56,11 @@ Write-Host "  [1/2] PyInstaller — .exe oluşturuluyor..." -ForegroundColor Cya
 Write-Host "        (3-8 dakika sürebilir)`n"
 
 & $Python -m PyInstaller `
-    gui_app.py `
+    $GuiDosya `
     --onefile `
     --noconsole `
     --name "ABD Portföy Analiz" `
-    "--add-data=ABD_Portföy_Analiz_Aracı.py;." `
+    "--add-data=$AnaDosya;." `
     --collect-all curl_cffi `
     --collect-all customtkinter `
     --collect-all yfinance `
@@ -75,13 +79,13 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-$ExePath = "dist\ABD Portföy Analiz.exe"
+$ExePath = Join-Path -Path $DistDir -ChildPath "ABD Portföy Analiz.exe"
 if (-not (Test-Path $ExePath)) {
     Write-Host "  ❌ .exe dosyası bulunamadı: $ExePath" -ForegroundColor Red
     exit 1
 }
 $ExeMB = [math]::Round((Get-Item $ExePath).Length / 1MB, 1)
-Write-Host "  ✅ .exe oluşturuldu ($ExeMB MB): $((Resolve-Path $ExePath).Path)" -ForegroundColor Green
+Write-Host "  ✅ .exe oluşturuldu ($ExeMB MB): $(Resolve-Path $ExePath)" -ForegroundColor Green
 
 # ── ADIM 2: Inno Setup ────────────────────────────────────────────────────────
 Write-Host ""
@@ -96,7 +100,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Çıktı dosyasını bul
-$SetupExe = Get-ChildItem "dist\ABD_Portfoy_Analiz_Setup_*.exe" |
+$SetupExe = Get-ChildItem (Join-Path -Path $DistDir -ChildPath "ABD_Portfoy_Analiz_Setup_*.exe") |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
 
